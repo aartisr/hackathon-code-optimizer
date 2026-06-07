@@ -16,6 +16,10 @@
           <p class="eyebrow">Browser SLM code review</p>
           <h1>Circuit - Code Optimizer</h1>
           <p class="lede">Paste code, let Phi-3 Mini evaluate it in your browser, then compare a cleaner version with the exact changes explained.</p>
+          <div id="safeModeBanner" class="safe-mode-banner" role="status" aria-live="polite" hidden>
+            <p><strong>Safe mode recommended:</strong> This device may be low on memory for Phi-3.</p>
+            <button id="enableSafeModeButton" type="button" class="secondary">Enable Tiny-only mode</button>
+          </div>
         </div>
         <div class="model-card" aria-live="polite">
           <div class="status-row">
@@ -46,6 +50,14 @@
             <option value="7">8. C++ positive counter</option>
             <option value="8">9. HTML/CSS profile card</option>
             <option value="9">10. JavaScript search helper</option>
+          </select>
+        </label>
+        <label>
+          Runtime Mode
+          <select id="runtimeMode" aria-label="Choose model runtime mode">
+            <option value="auto">Auto (Phi-3 then TinyLlama)</option>
+            <option value="tiny-only">TinyLlama only (safer)</option>
+            <option value="local-only">Local review only (no model)</option>
           </select>
         </label>
         <label>

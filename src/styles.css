@@ -113,6 +113,25 @@ h1 {
   line-height: 1.6;
 }
 
+.safe-mode-banner {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  max-width: 760px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #f1c77b;
+  border-radius: 8px;
+  background: #fff7e7;
+}
+
+.safe-mode-banner p {
+  margin: 0;
+  color: #5f4615;
+  font-size: 0.92rem;
+}
+
 /*
  * Shared glass-like surface treatment used by primary cards.
  *
@@ -237,7 +256,7 @@ button:disabled {
  */
 .control-strip {
   display: grid;
-  grid-template-columns: minmax(220px, 1.35fr) minmax(160px, 1fr) minmax(160px, 1fr) auto auto auto;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(190px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) auto auto auto;
   gap: 12px;
   align-items: end;
   margin: 10px 0 16px;
@@ -465,7 +484,8 @@ pre {
 
   .model-meta,
   .notes-header,
-  .editor-panel header {
+  .editor-panel header,
+  .safe-mode-banner {
     align-items: flex-start;
     flex-direction: column;
   }

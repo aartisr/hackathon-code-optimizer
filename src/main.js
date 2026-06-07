@@ -28,6 +28,9 @@ const els = {
   outputCode: document.querySelector("#outputCode code"),
   qualityLabel: document.querySelector("#qualityLabel"),
   qualityScore: document.querySelector("#qualityScore"),
+  runtimeMode: document.querySelector("#runtimeMode"),
+  safeModeBanner: document.querySelector("#safeModeBanner"),
+  enableSafeModeButton: document.querySelector("#enableSafeModeButton"),
   sampleButton: document.querySelector("#sampleButton"),
   sampleSelect: document.querySelector("#sampleSelect"),
   strictMode: document.querySelector("#strictMode")
@@ -299,6 +302,57 @@ function describeModelLoadError(error) {
 }
 
 /**
+ * Estimates whether the current device likely has constrained memory for Phi-3.
+ *
+ * @returns {boolean}
+ */
+function isLikelyLowMemoryDevice() {
+  const memoryGiB = Number(navigator.deviceMemory || 0);
+  return Number.isFinite(memoryGiB) && memoryGiB > 0 && memoryGiB < 8;
+}
+
+/**
+ * Shows or hides the one-click Safe Mode recommendation banner.
+ */
+function syncSafeModeBanner() {
+  const shouldShow = isLikelyLowMemoryDevice() && els.runtimeMode.value === "auto";
+  if (shouldShow) {
+    els.safeModeBanner.hidden = false;
+    return;
+  }
+
+  els.safeModeBanner.hidden = true;
+}
+
+/**
+ * Attempts to create one model engine and updates progress/status UI.
+ *
+ * @param {string} modelId WebLLM model identifier.
+ * @param {number} fallbackProgress Progress fallback used when report is missing.
+ * @param {string} loadingText Loading message while downloading model artifacts.
+ * @param {string} activeLabel Label shown in the model badge on success.
+ * @returns {Promise<any>}
+ */
+async function tryLoadModelCandidate(modelId, fallbackProgress, loadingText, activeLabel) {
+  const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+  const createEngine = webllm.CreateMLCEngine || webllm.CreateWebWorkerMLCEngine;
+  const loadedEngine = await createEngine(modelId, {
+    initProgressCallback: (report) => {
+      const progress = report.progress ? Math.round(report.progress * 100) : fallbackProgress;
+      setModelState("loading", report.text || loadingText, progress);
+    }
+  });
+
+  engine = loadedEngine;
+  activeModelId = modelId;
+  engineMode = "model";
+  els.activeModel.textContent = activeLabel;
+  els.engineBadge.textContent = modelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama";
+  setModelState("ready", `${modelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"} ready`, 100);
+  return loadedEngine;
+}
+
+/**
  * Loads a browser-local model engine if supported.
  *
  * Flow:
@@ -311,6 +365,14 @@ function describeModelLoadError(error) {
  * @returns {Promise<any | null>} Active engine when available; otherwise null for local mode.
  */
 async function loadModel(force = false) {
+  const runtimeMode = els.runtimeMode.value;
+  if (runtimeMode === "local-only") {
+    engineMode = "local";
+    els.engineBadge.textContent = "Local review mode";
+    setModelState("error", "Local-only mode enabled. Browser model loading is disabled.", 0);
+    return null;
+  }
+
   if (engine) return engine;
   if (modelAttempted && !force) return null;
   modelAttempted = true;
@@ -322,55 +384,81 @@ async function loadModel(force = false) {
   }
 
   els.loadModelButton.disabled = true;
-  setModelState("loading", "Loading Phi-3 Mini in browser...", 8);
+  const lowMemoryMode = runtimeMode === "auto" && isLikelyLowMemoryDevice();
+  const modelPlan =
+    runtimeMode === "tiny-only"
+      ? [
+          {
+            id: TINY_MODEL,
+            progress: 30,
+            loadingText: "Downloading TinyLlama...",
+            activeLabel: "Active: TinyLlama (safe mode)"
+          }
+        ]
+      : lowMemoryMode
+        ? [
+            {
+              id: TINY_MODEL,
+              progress: 30,
+              loadingText: "Downloading TinyLlama (safe mode)...",
+              activeLabel: "Active: TinyLlama (auto safe mode)"
+            },
+            {
+              id: PHI_MODEL,
+              progress: 18,
+              loadingText: "Downloading Phi-3 Mini...",
+              activeLabel: "Active: Phi-3 Mini"
+            }
+          ]
+        : [
+            {
+              id: PHI_MODEL,
+              progress: 18,
+              loadingText: "Downloading Phi-3 Mini...",
+              activeLabel: "Active: Phi-3 Mini"
+            },
+            {
+              id: TINY_MODEL,
+              progress: 30,
+              loadingText: "Downloading TinyLlama...",
+              activeLabel: "Active: TinyLlama fallback"
+            }
+          ];
+
+  if (lowMemoryMode) {
+    setModelState("loading", "Low memory detected. Trying TinyLlama first...", 8);
+  } else if (runtimeMode === "tiny-only") {
+    setModelState("loading", "Tiny-only mode enabled. Loading TinyLlama...", 8);
+  } else {
+    setModelState("loading", "Loading Phi-3 Mini in browser...", 8);
+  }
+
+  const failureReasons = [];
 
   try {
-    const webllm = await import("https://esm.run/@mlc-ai/web-llm");
-    const createEngine = webllm.CreateMLCEngine || webllm.CreateWebWorkerMLCEngine;
-    engine = await createEngine(PHI_MODEL, {
-      initProgressCallback: (report) => {
-        const progress = report.progress ? Math.round(report.progress * 100) : 18;
-        setModelState("loading", report.text || "Downloading Phi-3 Mini...", progress);
-      }
-    });
-    activeModelId = PHI_MODEL;
-    engineMode = "model";
-    els.activeModel.textContent = "Active: Phi-3 Mini";
-    els.engineBadge.textContent = "Phi-3 Mini";
-    setModelState("ready", "Phi-3 Mini ready", 100);
-    return engine;
-  } catch (phiError) {
-    const phiReason = describeModelLoadError(phiError);
-    console.error("Phi-3 model load failed:", phiError);
-    setModelState("loading", "Phi-3 failed. Trying TinyLlama...", 25);
-    try {
-      const webllm = await import("https://esm.run/@mlc-ai/web-llm");
-      const createEngine = webllm.CreateMLCEngine || webllm.CreateWebWorkerMLCEngine;
-      engine = await createEngine(TINY_MODEL, {
-        initProgressCallback: (report) => {
-          const progress = report.progress ? Math.round(report.progress * 100) : 30;
-          setModelState("loading", report.text || "Downloading TinyLlama...", progress);
+    for (let i = 0; i < modelPlan.length; i++) {
+      const candidate = modelPlan[i];
+
+      try {
+        if (i > 0) {
+          setModelState("loading", `${modelPlan[i - 1].id.includes("Phi") ? "Phi-3" : "TinyLlama"} failed. Trying ${candidate.id.includes("Phi") ? "Phi-3" : "TinyLlama"}...`, 25);
         }
-      });
-      activeModelId = TINY_MODEL;
-      engineMode = "model";
-      els.activeModel.textContent = "Active: TinyLlama fallback";
-      els.engineBadge.textContent = "TinyLlama";
-      setModelState("ready", "TinyLlama ready", 100);
-      return engine;
-    } catch (tinyError) {
-      const tinyReason = describeModelLoadError(tinyError);
-      console.error("TinyLlama model load failed:", tinyError);
-      engineMode = "local";
-      els.engineBadge.textContent = "Local review mode";
-      setModelState("error", `${tinyReason} Local review mode active.`, 0);
-      els.changeList.innerHTML = `
-        <li>${phiReason}</li>
-        <li>${tinyReason}</li>
-        <li>Using local review mode until model access is restored.</li>
-      `;
-      return null;
+        return await tryLoadModelCandidate(candidate.id, candidate.progress, candidate.loadingText, candidate.activeLabel);
+      } catch (candidateError) {
+        const reason = describeModelLoadError(candidateError);
+        failureReasons.push(reason);
+        console.error(`${candidate.id} model load failed:`, candidateError);
+      }
     }
+
+    engineMode = "local";
+    els.engineBadge.textContent = "Local review mode";
+    setModelState("error", `${failureReasons[0] || "Model unavailable."} Local review mode active.`, 0);
+    els.changeList.innerHTML = [
+      ...failureReasons.map((reason) => `<li>${reason}</li>`),
+      "<li>Using local review mode until model access is restored.</li>"
+    ].join("");
+    return null;
   } finally {
     els.loadModelButton.disabled = false;
   }
@@ -530,6 +618,25 @@ async function optimizeCode() {
 els.inputCode.addEventListener("input", updateInputStats);
 els.loadModelButton.addEventListener("click", () => loadModel(true));
 els.optimizeButton.addEventListener("click", optimizeCode);
+els.runtimeMode.addEventListener("change", () => {
+  modelAttempted = false;
+  if (els.runtimeMode.value === "local-only") {
+    engineMode = "local";
+    els.engineBadge.textContent = "Local review mode";
+    setModelState("error", "Local-only mode enabled. Browser model loading is disabled.", 0);
+  }
+  syncSafeModeBanner();
+});
+els.enableSafeModeButton.addEventListener("click", () => {
+  els.runtimeMode.value = "tiny-only";
+  modelAttempted = false;
+  engine = null;
+  engineMode = "local";
+  els.activeModel.textContent = "Primary: TinyLlama (safe mode)";
+  els.engineBadge.textContent = "Safe mode configured";
+  setModelState("loading", "Tiny-only mode enabled. Click Load model to continue.", 0);
+  syncSafeModeBanner();
+});
 els.sampleSelect.addEventListener("change", (event) => {
   const target = event.target;
   const selectedIndex = Number(target.value || 0);
@@ -548,3 +655,4 @@ els.copyButton.addEventListener("click", async () => {
 });
 
 loadSample(0);
+syncSafeModeBanner();
