@@ -17,6 +17,7 @@ Design goals:
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from pathlib import Path
@@ -85,6 +86,13 @@ class OptimizeResponse(BaseModel):
 
 
 app = FastAPI(title="Code Optimizer Backend", version="1.0.0")
+
+logger = logging.getLogger("backend")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 app.add_middleware(
     CORSMiddleware,
@@ -193,11 +201,12 @@ def model_inference_ready(model_key: str) -> bool:
     return has_checkpoint
 
 
-def resolve_requested_model(preferred: str) -> str:
+def resolve_requested_model(preferred: str, require_model: bool = False) -> str:
     """Resolve model preference into a concrete model key or ``none``.
 
-    ``auto`` mode may intentionally return ``none`` on CPU-only environments to
-    avoid very slow first-token latency from large local models.
+    ``auto`` mode avoids large CPU model loads unless the request explicitly
+    requires a model. In that case, the backend will attempt the smallest
+    available inference-ready model.
     """
 
     if preferred == "phi3" and model_inference_ready("phi3"):
@@ -205,9 +214,11 @@ def resolve_requested_model(preferred: str) -> str:
     if preferred == "tinyllama" and model_inference_ready("tinyllama"):
         return "tinyllama"
     if preferred == "auto":
-        if torch is not None and not torch.cuda.is_available():
-            # Avoid automatically loading a large model on CPU for fast frontend response.
+        cpu_only = torch is not None and not torch.cuda.is_available()
+        if cpu_only and not require_model:
             return "none"
+        if cpu_only and model_inference_ready("tinyllama"):
+            return "tinyllama"
         if model_inference_ready("phi3"):
             return "phi3"
         if model_inference_ready("tinyllama"):
@@ -290,6 +301,7 @@ def get_loaded_runtime(model_key: str):
     global _loaded_model_key, _loaded_model, _loaded_tokenizer
 
     if _loaded_model_key == model_key and _loaded_model is not None and _loaded_tokenizer is not None:
+        logger.info("Reusing loaded model %s", model_key)
         return _loaded_tokenizer, _loaded_model, 0.0
 
     if AutoTokenizer is None or AutoModelForCausalLM is None or torch is None:
@@ -299,6 +311,7 @@ def get_loaded_runtime(model_key: str):
     if not model_dir.exists():
         raise RuntimeError(f"Model directory missing: {model_dir}")
 
+    logger.info("Loading model %s from %s (cuda=%s)", model_key, model_dir, torch.cuda.is_available())
     load_started = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
 
@@ -316,6 +329,7 @@ def get_loaded_runtime(model_key: str):
     _loaded_model = model
     _loaded_tokenizer = tokenizer
     load_ms = max(0, round((time.perf_counter() - load_started) * 1000, 2))
+    logger.info("Loaded model %s in %.2fms", model_key, load_ms)
     return tokenizer, model, load_ms
 
 
@@ -324,6 +338,7 @@ def run_model_optimization(payload: OptimizeRequest, model_key: str) -> Optimize
     prompt = build_backend_prompt(payload)
     tokenizer, model, model_load_ms = get_loaded_runtime(model_key)
 
+    logger.info("Starting generation with model %s (performance=%s)", model_key, payload.performanceMode)
     generation_started = time.perf_counter()
     inputs = tokenizer(prompt, return_tensors="pt")
     if torch.cuda.is_available():
@@ -344,6 +359,7 @@ def run_model_optimization(payload: OptimizeRequest, model_key: str) -> Optimize
     generated_ids = output_ids[0][input_token_count:]
     generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
     generation_ms = max(0, round((time.perf_counter() - generation_started) * 1000, 2))
+    logger.info("Generation finished in %.2fms with %d generated tokens", generation_ms, generated_ids.shape[-1])
 
     post_started = time.perf_counter()
     optimized_code = extract_optimized_code(generated_text)
@@ -494,10 +510,18 @@ def optimize(payload: OptimizeRequest) -> OptimizeResponse:
     elif payload.performanceMode == "balanced":
         reason = "Backend local optimizer (balanced mode)"
 
-    selected_model = resolve_requested_model(payload.preferredModel)
+    selected_model = resolve_requested_model(payload.preferredModel, payload.requireModel)
+    logger.info(
+        "Optimize request: preferredModel=%s requireModel=%s selectedModel=%s performanceMode=%s",
+        payload.preferredModel,
+        payload.requireModel,
+        selected_model,
+        payload.performanceMode,
+    )
 
     if selected_model == "none":
         if payload.requireModel:
+            logger.error("Model required but no inference-ready model was available.")
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -505,6 +529,7 @@ def optimize(payload: OptimizeRequest) -> OptimizeResponse:
                     "Run models:download and ensure a Transformers-compatible model is cached."
                 ),
             )
+        logger.info("No model selected; using local heuristic fallback.")
         return run_local_optimization(
             payload.code,
             reason,
@@ -515,6 +540,7 @@ def optimize(payload: OptimizeRequest) -> OptimizeResponse:
     try:
         return run_model_optimization(payload, selected_model)
     except Exception as exc:
+        logger.exception("Model inference failed for model %s", selected_model)
         if payload.requireModel:
             raise HTTPException(
                 status_code=500,
