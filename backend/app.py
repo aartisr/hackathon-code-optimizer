@@ -292,6 +292,80 @@ def generation_config(performance_mode: str) -> dict[str, Union[float, int]]:
     return {"max_new_tokens": 260, "temperature": 0.1, "top_p": 0.85}
 
 
+def _clamp(value: float, low: float, high: float) -> int:
+    return int(round(max(low, min(high, value))))
+
+
+def _code_metrics(code: str) -> dict[str, float]:
+    text = code or ""
+    lines = text.splitlines()
+    non_empty_lines = [line for line in lines if line.strip()]
+
+    var_count = len(re.findall(r"\bvar\b", text))
+    loose_eq_count = len(re.findall(r"(^|[^=!])==(?!=)", text)) + len(re.findall(r"(^|[^=!])!=(?!=)", text))
+    repeated_assign_count = len(re.findall(r"(\w+)\s*=\s*\1\s*\+\s*", text))
+    bool_true_count = len(re.findall(r"===\s*true\b", text))
+    index_loop_count = len(re.findall(r"for\s*\(\s*(?:let|var|int)?\s*\w+\s*=\s*0\s*;\s*\w+\s*<\s*[^;]+\.length\s*;\s*\w+\+\+\s*\)", text))
+    long_lines = sum(1 for line in lines if len(line) > 100)
+
+    line_lengths = [len(line) for line in non_empty_lines]
+    avg_line_length = (sum(line_lengths) / len(line_lengths)) if line_lengths else 0.0
+
+    return {
+        "var_count": float(var_count),
+        "loose_eq_count": float(loose_eq_count),
+        "repeated_assign_count": float(repeated_assign_count),
+        "bool_true_count": float(bool_true_count),
+        "index_loop_count": float(index_loop_count),
+        "long_lines": float(long_lines),
+        "line_count": float(len(non_empty_lines)),
+        "char_count": float(len(text)),
+        "avg_line_length": float(avg_line_length),
+    }
+
+
+def calculate_scores(
+    original_code: str,
+    optimized_code: str,
+    change_count: int,
+    performance_mode: str,
+    source_kind: Literal["model", "local"],
+) -> tuple[int, int]:
+    """Compute quality and impact from concrete before/after code signals."""
+    before = _code_metrics(original_code)
+    after = _code_metrics(optimized_code)
+
+    fixed_issue_gain = 0.0
+    fixed_issue_gain += max(before["var_count"] - after["var_count"], 0) * 4.0
+    fixed_issue_gain += max(before["loose_eq_count"] - after["loose_eq_count"], 0) * 5.0
+    fixed_issue_gain += max(before["repeated_assign_count"] - after["repeated_assign_count"], 0) * 3.0
+    fixed_issue_gain += max(before["bool_true_count"] - after["bool_true_count"], 0) * 2.5
+    fixed_issue_gain += max(before["long_lines"] - after["long_lines"], 0) * 1.5
+
+    regressions = 0.0
+    regressions += max(after["var_count"] - before["var_count"], 0) * 3.0
+    regressions += max(after["loose_eq_count"] - before["loose_eq_count"], 0) * 4.0
+    regressions += max(after["long_lines"] - before["long_lines"], 0) * 1.5
+
+    readability_shift = max(before["avg_line_length"] - after["avg_line_length"], -20.0)
+    brevity_gain = 0.0
+    if before["char_count"] > 0:
+        brevity_gain = max((before["char_count"] - after["char_count"]) / before["char_count"], 0) * 12.0
+
+    mode_bonus = {"fast": 1.0, "balanced": 2.5, "quality": 4.0}.get(performance_mode, 1.0)
+    source_bonus = 2.0 if source_kind == "model" else 0.0
+    change_signal = min(max(change_count, 0), 10) * 0.8
+
+    quality = 66.0 + fixed_issue_gain + change_signal + (readability_shift * 0.25) + mode_bonus + source_bonus - regressions
+    impact = 48.0 + (fixed_issue_gain * 1.1) + brevity_gain + (mode_bonus * 0.8) - (regressions * 0.8)
+
+    if before["line_count"] <= 3 and fixed_issue_gain == 0:
+        quality -= 4.0
+        impact -= 6.0
+
+    return _clamp(quality, 35, 97), _clamp(impact, 25, 94)
+
+
 def get_loaded_runtime(model_key: str):
     """Load (or reuse) tokenizer/model runtime objects for a model key.
 
@@ -371,9 +445,13 @@ def run_model_optimization(payload: OptimizeRequest, model_key: str) -> Optimize
         "Output was parsed and validated for usable code content.",
     ]
 
-    score_bias = 10 if payload.performanceMode == "quality" else (6 if payload.performanceMode == "balanced" else 2)
-    quality_score = min(96, 80 + score_bias)
-    impact_score = min(92, 64 + score_bias)
+    quality_score, impact_score = calculate_scores(
+        payload.code,
+        optimized_code,
+        len(change_notes),
+        payload.performanceMode,
+        "model",
+    )
     post_ms = max(0, round((time.perf_counter() - post_started) * 1000, 2))
 
     model_name = MODEL_KEYS[model_key]
@@ -429,8 +507,13 @@ def run_local_optimization(code: str, reason: str, model_used: str, model_used_l
     if not changes:
         changes.append("Code is already compact enough for the backend local optimizer.")
 
-    quality_score = min(94, 66 + len(changes) * 7 + (8 if len(code) > 120 else 0))
-    impact_score = min(88, 42 + len(changes) * 10)
+    quality_score, impact_score = calculate_scores(
+        code,
+        optimized,
+        len(changes),
+        "fast",
+        "local",
+    )
     local_ms = max(0, round((time.perf_counter() - started_at) * 1000, 2))
 
     return OptimizeResponse(
