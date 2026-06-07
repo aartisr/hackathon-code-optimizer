@@ -19,6 +19,7 @@ const els = {
   impactScore: document.querySelector("#impactScore"),
   inputCode: document.querySelector("#inputCode"),
   inputStats: document.querySelector("#inputStats"),
+  inferenceMode: document.querySelector("#inferenceMode"),
   languageSelect: document.querySelector("#languageSelect"),
   loadModelButton: document.querySelector("#loadModelButton"),
   modelDot: document.querySelector("#modelDot"),
@@ -26,10 +27,12 @@ const els = {
   modelStatus: document.querySelector("#modelStatus"),
   optimizeButton: document.querySelector("#optimizeButton"),
   outputCode: document.querySelector("#outputCode code"),
+  performanceMode: document.querySelector("#performanceMode"),
   qualityLabel: document.querySelector("#qualityLabel"),
   qualityScore: document.querySelector("#qualityScore"),
   responseTime: document.querySelector("#responseTime"),
   responseTimeLabel: document.querySelector("#responseTimeLabel"),
+  backendUrl: document.querySelector("#backendUrl"),
   phaseTotal: document.querySelector("#phaseTotal"),
   phaseModelLoad: document.querySelector("#phaseModelLoad"),
   phaseGeneration: document.querySelector("#phaseGeneration"),
@@ -402,13 +405,81 @@ function isLikelyLowMemoryDevice() {
  * Shows or hides the one-click Safe Mode recommendation banner.
  */
 function syncSafeModeBanner() {
-  const shouldShow = isLikelyLowMemoryDevice() && els.runtimeMode.value === "auto";
+  const shouldShow = isLikelyLowMemoryDevice() && els.runtimeMode.value === "auto" && els.inferenceMode.value === "browser";
   if (shouldShow) {
     els.safeModeBanner.hidden = false;
     return;
   }
 
   els.safeModeBanner.hidden = true;
+}
+
+/**
+ * Syncs engine controls when switching between browser and backend inference.
+ */
+function syncInferenceModeUI() {
+  const backendMode = els.inferenceMode.value === "backend";
+  els.loadModelButton.disabled = backendMode;
+
+  if (backendMode) {
+    setModelState("ready", "Backend API mode enabled", 100);
+    els.engineBadge.textContent = "Backend API";
+    els.activeModel.textContent = "Source: Python backend";
+  } else {
+    els.engineBadge.textContent = "Browser runtime";
+    if (!engine) {
+      setModelState("loading", "Browser model idle", 0);
+      els.activeModel.textContent = "Primary: Phi-3 Mini";
+    }
+  }
+
+  syncSafeModeBanner();
+}
+
+/**
+ * Executes optimization through backend API.
+ *
+ * @param {string} code
+ * @returns {Promise<{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number, source: string, sourceLabel: string, timings: { modelLoadMs?: number, generationMs?: number, postProcessMs?: number, localOptimizeMs?: number } }>}
+ */
+async function runBackendOptimization(code) {
+  const backendBaseUrl = (els.backendUrl.value || "http://127.0.0.1:8000").replace(/\/$/, "");
+  const requestStartedAt = performance.now();
+
+  const response = await fetch(`${backendBaseUrl}/optimize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      code,
+      language: els.languageSelect.value,
+      goal: els.goalSelect.value,
+      strict: els.strictMode.checked,
+      performanceMode: els.performanceMode.value
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Backend optimization failed (${response.status}).`);
+  }
+
+  const payload = await response.json();
+  const roundTripMs = Math.max(0, performance.now() - requestStartedAt);
+  return {
+    optimizedCode: payload.optimizedCode || code,
+    changes: Array.isArray(payload.changes) ? payload.changes : ["Backend optimization completed."],
+    qualityScore: Number(payload.qualityScore) || 75,
+    impactScore: Number(payload.impactScore) || 55,
+    source: payload.source || "backend",
+    sourceLabel: payload.sourceLabel || "Backend API optimization",
+    timings: {
+      modelLoadMs: Number(payload?.timings?.modelLoadMs) || 0,
+      generationMs: Number(payload?.timings?.generationMs) || roundTripMs,
+      postProcessMs: Number(payload?.timings?.postProcessMs) || 0,
+      localOptimizeMs: Number(payload?.timings?.localOptimizeMs) || 0
+    }
+  };
 }
 
 /**
@@ -453,6 +524,7 @@ async function tryLoadModelCandidate(modelId, fallbackProgress, loadingText, act
  */
 async function loadModel(force = false) {
   const runtimeMode = els.runtimeMode.value;
+  const perfMode = els.performanceMode.value;
   if (runtimeMode === "local-only") {
     engineMode = "local";
     els.engineBadge.textContent = "Local review mode";
@@ -472,6 +544,7 @@ async function loadModel(force = false) {
 
   els.loadModelButton.disabled = true;
   const lowMemoryMode = runtimeMode === "auto" && isLikelyLowMemoryDevice();
+  const fastModeAuto = runtimeMode === "auto" && perfMode === "fast";
   const modelPlan =
     runtimeMode === "tiny-only"
       ? [
@@ -482,7 +555,16 @@ async function loadModel(force = false) {
             activeLabel: "Active: TinyLlama (safe mode)"
           }
         ]
-      : lowMemoryMode
+      : fastModeAuto
+        ? [
+            {
+              id: TINY_MODEL,
+              progress: 30,
+              loadingText: "Downloading TinyLlama (fast mode)...",
+              activeLabel: "Active: TinyLlama (fast mode)"
+            }
+          ]
+        : lowMemoryMode
         ? [
             {
               id: TINY_MODEL,
@@ -512,7 +594,9 @@ async function loadModel(force = false) {
             }
           ];
 
-  if (lowMemoryMode) {
+  if (fastModeAuto) {
+    setModelState("loading", "Fast mode enabled. Loading TinyLlama for lower latency...", 8);
+  } else if (lowMemoryMode) {
     setModelState("loading", "Low memory detected. Trying TinyLlama first...", 8);
   } else if (runtimeMode === "tiny-only") {
     setModelState("loading", "Tiny-only mode enabled. Loading TinyLlama...", 8);
@@ -611,11 +695,44 @@ ${code}`;
  * @returns {{ temperature: number, max_tokens: number, top_p?: number }}
  */
 function getGenerationSettings() {
+  const perfMode = els.performanceMode.value;
+
   if (activeModelId === TINY_MODEL) {
+    if (perfMode === "fast") {
+      return {
+        temperature: 0,
+        max_tokens: 380,
+        top_p: 0.85
+      };
+    }
+
+    if (perfMode === "quality") {
+      return {
+        temperature: 0.2,
+        max_tokens: 1500,
+        top_p: 0.95
+      };
+    }
+
     return {
       temperature: 0.15,
       max_tokens: 1200,
       top_p: 0.9
+    };
+  }
+
+  if (perfMode === "fast") {
+    return {
+      temperature: 0,
+      max_tokens: 520,
+      top_p: 0.9
+    };
+  }
+
+  if (perfMode === "quality") {
+    return {
+      temperature: 0,
+      max_tokens: 2200
     };
   }
 
@@ -670,6 +787,11 @@ ${priorResponse}`
  * @returns {Promise<{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }>}
  */
 async function runModelOptimization(code) {
+  const perfMode = els.performanceMode.value;
+  if (perfMode === "fast" && code.length > 2400) {
+    return runLocalOptimization(code, "Fast mode used local optimization for large input.");
+  }
+
   const modelLoadStartedAt = performance.now();
   const loadedEngine = await loadModel();
   const modelLoadMs = Math.max(0, performance.now() - modelLoadStartedAt);
@@ -685,7 +807,7 @@ async function runModelOptimization(code) {
   }
 
   const generation = getGenerationSettings();
-  const prompt = activeModelId === TINY_MODEL ? buildTinyPrompt(code) : buildPrompt(code);
+  const prompt = activeModelId === TINY_MODEL || perfMode === "fast" ? buildTinyPrompt(code) : buildPrompt(code);
 
   setModelState("loading", `Optimizing with ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}...`, 100);
   const generationStartedAt = performance.now();
@@ -699,7 +821,7 @@ async function runModelOptimization(code) {
 
   let modelText = response.choices?.[0]?.message?.content || "";
   let usedCorrection = false;
-  if (!isStrictOptimizedCodeJson(modelText)) {
+  if (!isStrictOptimizedCodeJson(modelText) && perfMode !== "fast") {
     usedCorrection = true;
     modelText = await requestStrictJsonCorrection(loadedEngine, code, modelText);
   }
@@ -853,7 +975,10 @@ async function optimizeCode() {
   els.phaseLocal.textContent = "...";
 
   try {
-    const result = engineMode === "model" ? await runModelOptimization(code) : await runModelOptimization(code);
+    const result =
+      els.inferenceMode.value === "backend"
+        ? await runBackendOptimization(code)
+        : await runModelOptimization(code);
     renderResults(result);
     renderResponseTime(performance.now() - startedAt, result.timings || {});
   } catch (error) {
@@ -873,6 +998,10 @@ async function optimizeCode() {
 els.inputCode.addEventListener("input", updateInputStats);
 els.loadModelButton.addEventListener("click", () => loadModel(true));
 els.optimizeButton.addEventListener("click", optimizeCode);
+els.inferenceMode.addEventListener("change", () => {
+  modelAttempted = false;
+  syncInferenceModeUI();
+});
 els.runtimeMode.addEventListener("change", () => {
   modelAttempted = false;
   if (els.runtimeMode.value === "local-only") {
@@ -881,6 +1010,9 @@ els.runtimeMode.addEventListener("change", () => {
     setModelState("error", "Local-only mode enabled. Browser model loading is disabled.", 0);
   }
   syncSafeModeBanner();
+});
+els.performanceMode.addEventListener("change", () => {
+  modelAttempted = false;
 });
 els.enableSafeModeButton.addEventListener("click", () => {
   els.runtimeMode.value = "tiny-only";
@@ -911,3 +1043,4 @@ els.copyButton.addEventListener("click", async () => {
 
 loadSample(0);
 syncSafeModeBanner();
+syncInferenceModeUI();

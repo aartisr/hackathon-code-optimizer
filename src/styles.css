@@ -256,7 +256,7 @@ button:disabled {
  */
 .control-strip {
   display: grid;
-  grid-template-columns: minmax(220px, 1.25fr) minmax(190px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) auto auto auto;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   align-items: end;
   margin: 10px 0 16px;
@@ -273,7 +273,8 @@ label {
   text-transform: uppercase;
 }
 
-select {
+select,
+.control-strip input[type="url"] {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -282,6 +283,10 @@ select {
   color: var(--ink);
   background: white;
   font-weight: 700;
+}
+
+.control-strip input[type="url"] {
+  font-weight: 600;
 }
 
 .toggle {

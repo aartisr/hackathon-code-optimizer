@@ -38,6 +38,17 @@
 
       <section class="control-strip" aria-label="Optimizer controls">
         <label>
+          Inference Engine
+          <select id="inferenceMode" aria-label="Choose inference engine">
+            <option value="browser" selected>Browser (WebGPU)</option>
+            <option value="backend">Backend API (Python)</option>
+          </select>
+        </label>
+        <label>
+          Backend URL
+          <input id="backendUrl" type="url" value="http://127.0.0.1:8000" placeholder="http://127.0.0.1:8000" />
+        </label>
+        <label>
           Sample Library
           <select id="sampleSelect" aria-label="Choose a sample code snippet">
             <option value="0">1. JavaScript cart total</option>
@@ -58,6 +69,14 @@
             <option value="auto">Auto (Phi-3 then TinyLlama)</option>
             <option value="tiny-only">TinyLlama only (safer)</option>
             <option value="local-only">Local review only (no model)</option>
+          </select>
+        </label>
+        <label>
+          Performance
+          <select id="performanceMode" aria-label="Choose performance mode">
+            <option value="fast" selected>Fast (lowest latency)</option>
+            <option value="balanced">Balanced</option>
+            <option value="quality">Quality</option>
           </select>
         </label>
         <label>

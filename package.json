@@ -5,6 +5,11 @@
   "description": "Browser-based code optimizer powered by Phi-3 Mini with TinyLlama fallback.",
   "scripts": {
     "dev": "python3 -m http.server 5179",
-    "start": "python3 -m http.server 5179"
+    "start": "python3 -m http.server 5179",
+    "dev:web": "python3 -m http.server 5179",
+    "dev:api": "python3 -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload",
+    "models:download": "python3 backend/download_models.py --all",
+    "models:download:phi3": "python3 backend/download_models.py --model phi3",
+    "models:download:tiny": "python3 backend/download_models.py --model tinyllama"
   }
 }

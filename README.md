@@ -55,6 +55,47 @@ Open:
 http://127.0.0.1:5179
 ```
 
+## Backend Mode (Python FastAPI)
+
+This project now supports a backend inference path to avoid browser memory limits.
+
+### Start Backend API
+
+```bash
+python3 -m pip install -r backend/requirements.txt
+npm run models:download
+npm run dev:api
+```
+
+`npm run models:download` is a one-time setup step. It stores model artifacts under `backend/model-cache/` and skips re-download on future runs unless you force it.
+
+Optional targeted downloads:
+
+```bash
+npm run models:download:phi3
+npm run models:download:tiny
+```
+
+The backend runs at:
+
+```text
+http://127.0.0.1:8000
+```
+
+### Start Frontend
+
+```bash
+npm run dev:web
+```
+
+### Use Backend In UI
+
+1. Set `Inference Engine` to `Backend API (Python)`.
+2. Keep `Backend URL` as `http://127.0.0.1:8000` (or change it if hosted elsewhere).
+3. Click `Optimize code`.
+
+The app will call `POST /optimize` and display source/timing metadata from the backend response.
+
 ## Runtime Flow
 
 1. App boots and caches element references.
