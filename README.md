@@ -138,6 +138,114 @@ Important:
 - When `Require backend model` is enabled, backend will fail fast instead of using heuristic fallback.
 - When `Require backend model` is disabled, backend may fall back to heuristic optimization if model inference fails.
 
+## Backend Developer Map
+
+This section maps backend functions to responsibilities so contributors can quickly trace behavior.
+
+### API Endpoints (`backend/app.py`)
+
+1. `GET /health`
+- Liveness probe only.
+- Returns `{ "status": "ok" }`.
+
+2. `GET /status`
+- Readiness/diagnostics endpoint used for UX indicators.
+- Reports:
+  - runtime availability (Transformers/Torch/CUDA)
+  - loaded model key in memory
+  - per-model cache readiness details
+  - model auto-selection result and reason
+
+3. `POST /optimize`
+- Main optimization entry point.
+- High-level flow:
+  1. Resolve model using `resolve_requested_model(preferredModel)`.
+  2. If no model is ready:
+     - return `503` when `requireModel=true`
+     - otherwise run heuristic fallback via `run_local_optimization(...)`
+  3. If model is ready:
+     - run inference via `run_model_optimization(...)`
+     - on inference failure:
+       - return `500` when `requireModel=true`
+       - otherwise fallback to `run_local_optimization(...)`
+
+### Core Backend Functions (`backend/app.py`)
+
+- `inspect_model_cache(model_key)`:
+  - Produces structured cache diagnostics for `/status`.
+- `model_inference_ready(model_key)`:
+  - Validates marker + tokenizer + checkpoint presence.
+- `resolve_requested_model(preferred)`:
+  - Converts user preference (`auto|phi3|tinyllama`) into a concrete model key or `none`.
+- `build_backend_prompt(payload)`:
+  - Creates deterministic optimization prompt for local model generation.
+- `get_loaded_runtime(model_key)`:
+  - Loads/caches tokenizer + model in-process.
+- `run_model_optimization(payload, model_key)`:
+  - Executes generation, parses output, and returns normalized response metadata.
+- `run_local_optimization(code, reason, ...)`:
+  - Deterministic regex-based fallback path.
+- `extract_optimized_code(raw_text)`:
+  - Extracts `optimizedCode` from strict JSON first, then code fences, then raw text.
+
+### Model Cache Bootstrap (`backend/download_models.py`)
+
+- `download_model(model_key, force=False)`:
+  - Pulls Hugging Face snapshot into `backend/model-cache/<model_key>`.
+- `is_downloaded(model_key)`:
+  - Verifies marker and required tokenizer/checkpoint files before returning `true`.
+- `write_marker(model_key, repo_id)`:
+  - Writes `.download-complete.json` used by readiness checks.
+- `main()`:
+  - CLI entrypoint for `--all`, `--model`, and optional `--force`.
+
+### Error Contract Notes
+
+- `503 Service Unavailable`:
+  - No inference-ready model and `requireModel=true`.
+- `500 Internal Server Error`:
+  - Model was selected but inference failed while `requireModel=true`.
+- `200 OK` with `source=backend-local`:
+  - Fallback path executed when strict model requirement is disabled.
+
+### Optimize Request Sequence
+
+```mermaid
+sequenceDiagram
+  participant UI as Frontend UI
+  participant API as FastAPI /optimize
+  participant SEL as Model Selector
+  participant LLM as Local Model Runtime
+  participant LOC as Local Heuristic Optimizer
+
+  UI->>API: POST /optimize (code, preferredModel, requireModel)
+  API->>SEL: resolve_requested_model(preferredModel)
+
+  alt No inference-ready model
+    alt requireModel=true
+      API-->>UI: 503 Service Unavailable
+    else requireModel=false
+      API->>LOC: run_local_optimization(...)
+      LOC-->>API: optimized code + metadata
+      API-->>UI: 200 OK (source=backend-local)
+    end
+  else Model available
+    API->>LLM: run_model_optimization(...)
+    alt Model inference succeeds
+      LLM-->>API: optimized code + timings
+      API-->>UI: 200 OK (source=backend-model)
+    else Model inference fails
+      alt requireModel=true
+        API-->>UI: 500 Internal Server Error
+      else requireModel=false
+        API->>LOC: run_local_optimization(...)
+        LOC-->>API: optimized code + metadata
+        API-->>UI: 200 OK (source=backend-local)
+      end
+    end
+  end
+```
+
 ## UI Controls Overview
 
 - `Inference Engine`: choose Browser or Backend API execution.

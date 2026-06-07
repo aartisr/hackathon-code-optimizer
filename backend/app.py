@@ -1,3 +1,20 @@
+"""FastAPI backend for code optimization.
+
+This service exposes three primary HTTP endpoints:
+
+- ``GET /health``: liveness probe for infrastructure and UI checks.
+- ``GET /status``: readiness and diagnostics for model/runtime state.
+- ``POST /optimize``: optimization entry point with model-first or heuristic
+    fallback behavior.
+
+Design goals:
+
+- Keep request/response contracts explicit with Pydantic models.
+- Be honest about optimization source (model vs heuristic).
+- Support strict "model-required" mode when users need guaranteed inference.
+- Provide transparent timing and model metadata to the frontend.
+"""
+
 from __future__ import annotations
 
 import re
@@ -20,6 +37,18 @@ except Exception:  # pragma: no cover - optional dependency/runtime guard
 
 
 class OptimizeRequest(BaseModel):
+    """Input payload for optimization requests.
+
+    Attributes:
+        code: Source code to optimize. Must be non-empty.
+        language: User-selected language hint.
+        goal: User-selected optimization goal.
+        strict: Whether behavior-preserving optimization is required.
+        performanceMode: Runtime generation profile.
+        preferredModel: Backend model preference (or auto-selection).
+        requireModel: If true, reject requests when model inference is unavailable.
+    """
+
     code: str = Field(min_length=1)
     language: str = "Auto detect"
     goal: str = "Balanced cleanup"
@@ -30,6 +59,11 @@ class OptimizeRequest(BaseModel):
 
 
 class TimingBreakdown(BaseModel):
+    """Detailed timing breakdown returned to the frontend.
+
+    All values are milliseconds and optional to accommodate fallback paths.
+    """
+
     modelLoadMs: Optional[float] = None
     generationMs: Optional[float] = None
     postProcessMs: Optional[float] = None
@@ -37,6 +71,8 @@ class TimingBreakdown(BaseModel):
 
 
 class OptimizeResponse(BaseModel):
+    """Normalized optimization result returned by the backend."""
+
     optimizedCode: str
     changes: list[str]
     qualityScore: int
@@ -69,12 +105,67 @@ _loaded_tokenizer = None
 _loaded_model = None
 
 
+def inspect_model_cache(model_key: str) -> dict[str, Union[bool, str, int]]:
+    """Inspect cached files for a model and return readiness diagnostics.
+
+    The returned object is used by ``GET /status`` so the UI can explain
+    availability issues before a user runs optimization.
+    """
+
+    model_dir = MODEL_CACHE_ROOT / model_key
+    marker_exists = (model_dir / ".download-complete.json").exists()
+    dir_exists = model_dir.exists()
+
+    tokenizer_files = ["tokenizer.json", "tokenizer.model", "tokenizer_config.json"]
+    checkpoint_patterns = [
+        "pytorch_model*.bin",
+        "*.safetensors",
+        "tf_model.h5",
+        "model.ckpt.index",
+        "flax_model.msgpack",
+    ]
+
+    tokenizer_present = any((model_dir / file_name).exists() for file_name in tokenizer_files)
+    checkpoint_count = sum(len(list(model_dir.glob(pattern))) for pattern in checkpoint_patterns) if dir_exists else 0
+    inference_ready = marker_exists and dir_exists and tokenizer_present and checkpoint_count > 0
+
+    return {
+        "key": model_key,
+        "repo": MODEL_KEYS[model_key],
+        "directoryExists": dir_exists,
+        "markerExists": marker_exists,
+        "tokenizerPresent": tokenizer_present,
+        "checkpointCount": checkpoint_count,
+        "inferenceReady": inference_ready,
+    }
+
+
+def auto_selection_reason() -> str:
+    """Describe why automatic model selection chose its current result."""
+    if torch is None:
+        return "transformers-runtime-missing"
+    if not torch.cuda.is_available():
+        return "auto-disabled-on-cpu"
+    if model_inference_ready("phi3"):
+        return "phi3-ready"
+    if model_inference_ready("tinyllama"):
+        return "tinyllama-ready"
+    return "no-inference-ready-cache"
+
+
 def model_cached(model_key: str) -> bool:
+    """Return True when the model marker file exists in cache."""
     marker = MODEL_CACHE_ROOT / model_key / ".download-complete.json"
     return marker.exists()
 
 
 def model_inference_ready(model_key: str) -> bool:
+    """Return True when a model cache has all files needed for inference.
+
+    Readiness requires marker, directory, tokenizer files, and at least one
+    recognized checkpoint artifact.
+    """
+
     model_dir = MODEL_CACHE_ROOT / model_key
     if not model_cached(model_key):
         return False
@@ -103,6 +194,12 @@ def model_inference_ready(model_key: str) -> bool:
 
 
 def resolve_requested_model(preferred: str) -> str:
+    """Resolve model preference into a concrete model key or ``none``.
+
+    ``auto`` mode may intentionally return ``none`` on CPU-only environments to
+    avoid very slow first-token latency from large local models.
+    """
+
     if preferred == "phi3" and model_inference_ready("phi3"):
         return "phi3"
     if preferred == "tinyllama" and model_inference_ready("tinyllama"):
@@ -119,6 +216,7 @@ def resolve_requested_model(preferred: str) -> str:
 
 
 def build_backend_prompt(payload: OptimizeRequest) -> str:
+    """Construct the backend generation prompt using frontend request intent."""
     strict_text = "yes" if payload.strict else "no"
     return (
         "You are a senior code optimizer. Optimize the user's code while preserving behavior.\n\n"
@@ -142,6 +240,15 @@ def build_backend_prompt(payload: OptimizeRequest) -> str:
 
 
 def extract_optimized_code(raw_text: str) -> Optional[str]:
+    """Extract optimized code from model output.
+
+    Parsing strategy:
+
+    1. Try strict JSON payload extraction (preferred contract).
+    2. Try fenced code block extraction.
+    3. Fall back to trimmed raw output if non-empty.
+    """
+
     text = (raw_text or "").strip()
     start = text.find("{")
     end = text.rfind("}")
@@ -166,6 +273,7 @@ def extract_optimized_code(raw_text: str) -> Optional[str]:
 
 
 def generation_config(performance_mode: str) -> dict[str, Union[float, int]]:
+    """Return generation parameters for the selected performance profile."""
     if performance_mode == "quality":
         return {"max_new_tokens": 640, "temperature": 0.3, "top_p": 0.95}
     if performance_mode == "balanced":
@@ -174,6 +282,11 @@ def generation_config(performance_mode: str) -> dict[str, Union[float, int]]:
 
 
 def get_loaded_runtime(model_key: str):
+    """Load (or reuse) tokenizer/model runtime objects for a model key.
+
+    Returns tokenizer, model, and load duration in milliseconds.
+    """
+
     global _loaded_model_key, _loaded_model, _loaded_tokenizer
 
     if _loaded_model_key == model_key and _loaded_model is not None and _loaded_tokenizer is not None:
@@ -207,6 +320,7 @@ def get_loaded_runtime(model_key: str):
 
 
 def run_model_optimization(payload: OptimizeRequest, model_key: str) -> OptimizeResponse:
+    """Execute model-based optimization and normalize backend response shape."""
     prompt = build_backend_prompt(payload)
     tokenizer, model, model_load_ms = get_loaded_runtime(model_key)
 
@@ -266,6 +380,12 @@ def run_model_optimization(payload: OptimizeRequest, model_key: str) -> Optimize
 
 
 def run_local_optimization(code: str, reason: str, model_used: str, model_used_label: str) -> OptimizeResponse:
+    """Execute heuristic optimization as a deterministic fallback path.
+
+    This path avoids LLM dependencies and provides baseline code cleanups with
+    transparent source labeling.
+    """
+
     started_at = time.perf_counter()
     optimized = code
     changes: list[str] = []
@@ -317,11 +437,57 @@ def run_local_optimization(code: str, reason: str, model_used: str, model_used_l
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Liveness endpoint used for basic service health checks."""
     return {"status": "ok"}
+
+
+@app.get("/status")
+def status() -> dict[str, Union[str, bool, dict, list, None]]:
+    """Readiness and diagnostics endpoint for frontend and troubleshooting.
+
+    Includes:
+
+    - runtime availability (Transformers/Torch/CUDA)
+    - per-model cache readiness details
+    - current auto-selection result and reason
+    - currently loaded model key (if any)
+    """
+
+    cache_report = [inspect_model_cache("phi3"), inspect_model_cache("tinyllama")]
+    return {
+        "status": "ok",
+        "backend": {
+            "api": "ready",
+            "modelRequiredDefault": True,
+            "transformersRuntimeAvailable": AutoTokenizer is not None and AutoModelForCausalLM is not None and torch is not None,
+            "cudaAvailable": bool(torch is not None and torch.cuda.is_available()),
+            "loadedModelKey": _loaded_model_key,
+        },
+        "cache": cache_report,
+        "selection": {
+            "autoResult": resolve_requested_model("auto"),
+            "autoReason": auto_selection_reason(),
+            "phi3Result": resolve_requested_model("phi3"),
+            "tinyllamaResult": resolve_requested_model("tinyllama"),
+        },
+    }
 
 
 @app.post("/optimize", response_model=OptimizeResponse)
 def optimize(payload: OptimizeRequest) -> OptimizeResponse:
+    """Optimize code using selected backend strategy.
+
+    Flow:
+
+    1. Resolve model selection from request preference and cache readiness.
+    2. If no model is available:
+       - return 503 when ``requireModel`` is true
+       - otherwise use heuristic fallback
+    3. If model is available:
+       - run model optimization
+       - if model fails and ``requireModel`` is false, use heuristic fallback
+    """
+
     reason = "Backend local optimizer (FastAPI)"
     if payload.performanceMode == "quality":
         reason = "Backend local optimizer (quality mode)"

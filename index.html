@@ -46,6 +46,11 @@
           <p class="kicker">Current Run Plan</p>
           <strong id="modeSummaryTitle">Backend model required</strong>
           <p id="modeSummaryText">Using backend inference. Request will fail if no backend model can run.</p>
+          <div class="status-pills" aria-label="Runtime readiness indicators">
+            <span id="backendStatusPill" class="status-pill status-neutral">Backend: checking</span>
+            <span id="modelRuntimePill" class="status-pill status-neutral">Model runtime: unknown</span>
+            <span id="fallbackModePill" class="status-pill status-neutral">Fallback: unknown</span>
+          </div>
         </article>
       </section>
 

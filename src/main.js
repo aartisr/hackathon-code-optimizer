@@ -509,22 +509,38 @@ function updateModeSummary() {
 async function runBackendOptimization(code) {
   const backendBaseUrl = (els.backendUrl.value || "http://127.0.0.1:8000").replace(/\/$/, "");
   const requestStartedAt = performance.now();
+  const controller = new AbortController();
+  const timeoutMs = 45000;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
-  const response = await fetch(`${backendBaseUrl}/optimize`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      code,
-      language: els.languageSelect.value,
-      goal: els.goalSelect.value,
-      strict: els.strictMode.checked,
-      performanceMode: els.performanceMode.value,
-      preferredModel: els.backendModel?.value || "auto",
-      requireModel: Boolean(els.requireBackendModel?.checked)
-    })
-  });
+  let response;
+  try {
+    response = await fetch(`${backendBaseUrl}/optimize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        code,
+        language: els.languageSelect.value,
+        goal: els.goalSelect.value,
+        strict: els.strictMode.checked,
+        performanceMode: els.performanceMode.value,
+        preferredModel: els.backendModel?.value || "auto",
+        requireModel: Boolean(els.requireBackendModel?.checked)
+      }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(
+        "Backend request timed out after 45s. The backend may be loading a model, blocked by network policy, or unavailable."
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let detail = "";
