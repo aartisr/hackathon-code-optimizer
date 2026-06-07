@@ -1,8 +1,6 @@
 # Repository File Summary
 
 This guide explains what every tracked file in this repo does.
-It is written in very simple, non-technical language.
-If you are new to coding, this should still make sense.
 
 ## .gitignore
 This file tells Git which folders/files should NOT be saved in version history.
