@@ -28,6 +28,13 @@ const els = {
   outputCode: document.querySelector("#outputCode code"),
   qualityLabel: document.querySelector("#qualityLabel"),
   qualityScore: document.querySelector("#qualityScore"),
+  responseTime: document.querySelector("#responseTime"),
+  responseTimeLabel: document.querySelector("#responseTimeLabel"),
+  phaseTotal: document.querySelector("#phaseTotal"),
+  phaseModelLoad: document.querySelector("#phaseModelLoad"),
+  phaseGeneration: document.querySelector("#phaseGeneration"),
+  phasePostProcess: document.querySelector("#phasePostProcess"),
+  phaseLocal: document.querySelector("#phaseLocal"),
   resultSource: document.querySelector("#resultSource"),
   runtimeMode: document.querySelector("#runtimeMode"),
   safeModeBanner: document.querySelector("#safeModeBanner"),
@@ -575,6 +582,50 @@ ${code}
 }
 
 /**
+ * TinyLlama-focused prompt: shorter, rule-driven, and easier to follow.
+ *
+ * @param {string} code User-provided source code.
+ * @returns {string}
+ */
+function buildTinyPrompt(code) {
+  return `Optimize this code.
+
+Requirements:
+- Preserve behavior.
+- Keep the same language.
+- Improve readability and basic efficiency.
+- Do not explain anything.
+- Return JSON only.
+
+Output format (exact):
+{"optimizedCode":"..."}
+
+Input code:
+${code}`;
+}
+
+/**
+ * Returns model-tuned generation settings.
+ * TinyLlama benefits from shorter outputs and slightly non-zero temperature.
+ *
+ * @returns {{ temperature: number, max_tokens: number, top_p?: number }}
+ */
+function getGenerationSettings() {
+  if (activeModelId === TINY_MODEL) {
+    return {
+      temperature: 0.15,
+      max_tokens: 1200,
+      top_p: 0.9
+    };
+  }
+
+  return {
+    temperature: 0,
+    max_tokens: 1800
+  };
+}
+
+/**
  * Requests a strict JSON-only correction when the first model reply drifts.
  *
  * @param {any} loadedEngine
@@ -619,19 +670,31 @@ ${priorResponse}`
  * @returns {Promise<{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }>}
  */
 async function runModelOptimization(code) {
+  const modelLoadStartedAt = performance.now();
   const loadedEngine = await loadModel();
+  const modelLoadMs = Math.max(0, performance.now() - modelLoadStartedAt);
   if (!loadedEngine) {
-    return runLocalOptimization(code, "Model unavailable in current runtime mode.");
+    const fallbackResult = runLocalOptimization(code, "Model unavailable in current runtime mode.");
+    fallbackResult.timings = {
+      ...(fallbackResult.timings || {}),
+      modelLoadMs,
+      generationMs: 0,
+      postProcessMs: 0
+    };
+    return fallbackResult;
   }
 
+  const generation = getGenerationSettings();
+  const prompt = activeModelId === TINY_MODEL ? buildTinyPrompt(code) : buildPrompt(code);
+
   setModelState("loading", `Optimizing with ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}...`, 100);
+  const generationStartedAt = performance.now();
   const response = await loadedEngine.chat.completions.create({
     messages: [
       { role: "system", content: "You optimize code and return strict JSON only." },
-      { role: "user", content: buildPrompt(code) }
+      { role: "user", content: prompt }
     ],
-    temperature: 0,
-    max_tokens: 1800
+    ...generation
   });
 
   let modelText = response.choices?.[0]?.message?.content || "";
@@ -640,9 +703,18 @@ async function runModelOptimization(code) {
     usedCorrection = true;
     modelText = await requestStrictJsonCorrection(loadedEngine, code, modelText);
   }
+  const generationMs = Math.max(0, performance.now() - generationStartedAt);
 
   setModelState("ready", `${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"} ready`, 100);
+  const postProcessStartedAt = performance.now();
   const result = parseModelResponse(modelText, code);
+  const postProcessMs = Math.max(0, performance.now() - postProcessStartedAt);
+  result.timings = {
+    ...(result.timings || {}),
+    modelLoadMs,
+    generationMs,
+    postProcessMs
+  };
   if (usedCorrection && result.source && result.source.startsWith("model")) {
     result.sourceLabel = "Model output (strict JSON after correction pass)";
   }
@@ -659,6 +731,7 @@ async function runModelOptimization(code) {
  * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
  */
 function runLocalOptimization(code, reason = "Local heuristic optimization (no model).") {
+  const startedAt = performance.now();
   let optimized = code;
   const changes = [];
 
@@ -694,6 +767,7 @@ function runLocalOptimization(code, reason = "Local heuristic optimization (no m
 
   const qualityScore = Math.min(94, 66 + changes.length * 7 + Math.round(code.length > 120 ? 8 : 0));
   const impactScore = Math.min(88, 42 + changes.length * 10);
+  const localOptimizeMs = Math.max(0, Math.round(performance.now() - startedAt));
 
   return {
     optimizedCode: optimized,
@@ -701,7 +775,10 @@ function runLocalOptimization(code, reason = "Local heuristic optimization (no m
     qualityScore,
     impactScore,
     source: "local",
-    sourceLabel: reason
+    sourceLabel: reason,
+    timings: {
+      localOptimizeMs
+    }
   };
 }
 
@@ -726,6 +803,30 @@ function renderResults(result) {
 }
 
 /**
+ * Renders elapsed optimization time.
+ *
+ * @param {number} elapsedMs
+ * @param {{ modelLoadMs?: number, generationMs?: number, postProcessMs?: number, localOptimizeMs?: number }} [timings]
+ */
+function renderResponseTime(elapsedMs, timings = {}) {
+  const safeMs = Math.max(0, Math.round(elapsedMs));
+  const seconds = safeMs / 1000;
+  els.responseTime.textContent = seconds >= 10 ? `${seconds.toFixed(1)}s` : `${seconds.toFixed(2)}s`;
+  els.responseTimeLabel.textContent = `${safeMs.toLocaleString()} ms end-to-end`;
+
+  const formatMs = (value) => {
+    if (!Number.isFinite(value) || value < 0) return "--";
+    return `${Math.round(value).toLocaleString()} ms`;
+  };
+
+  els.phaseTotal.textContent = formatMs(safeMs);
+  els.phaseModelLoad.textContent = formatMs(timings.modelLoadMs);
+  els.phaseGeneration.textContent = formatMs(timings.generationMs);
+  els.phasePostProcess.textContent = formatMs(timings.postProcessMs);
+  els.phaseLocal.textContent = formatMs(timings.localOptimizeMs);
+}
+
+/**
  * Main click handler for the optimize action.
  * Guards empty input, shows transient working UI, and always re-enables controls.
  *
@@ -738,18 +839,29 @@ async function optimizeCode() {
     return;
   }
 
+  const startedAt = performance.now();
+
   els.optimizeButton.disabled = true;
   els.outputCode.textContent = "Analyzing and optimizing...";
   els.changeList.innerHTML = "<li>Working through structure, readability, and behavior-preserving changes.</li>";
+  els.responseTime.textContent = "...";
+  els.responseTimeLabel.textContent = "Timing current run...";
+  els.phaseTotal.textContent = "...";
+  els.phaseModelLoad.textContent = "...";
+  els.phaseGeneration.textContent = "...";
+  els.phasePostProcess.textContent = "...";
+  els.phaseLocal.textContent = "...";
 
   try {
     const result = engineMode === "model" ? await runModelOptimization(code) : await runModelOptimization(code);
     renderResults(result);
+    renderResponseTime(performance.now() - startedAt, result.timings || {});
   } catch (error) {
-    const result = runLocalOptimization(code);
+    const result = runLocalOptimization(code, "Local fallback after model runtime error.");
     renderResults(result);
     els.engineBadge.textContent = "Local review mode";
     setModelState("error", "Model run failed. Local review shown.", 0);
+    renderResponseTime(performance.now() - startedAt, result.timings || {});
   } finally {
     els.optimizeButton.disabled = false;
   }

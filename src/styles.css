@@ -380,7 +380,7 @@ pre {
  */
 .insights-grid {
   display: grid;
-  grid-template-columns: 210px 210px 1fr;
+  grid-template-columns: 210px 210px 210px 1fr;
   gap: 16px;
   margin-top: 16px;
 }
@@ -413,6 +413,29 @@ pre {
   margin-top: 8px;
   color: var(--muted);
   font-weight: 700;
+}
+
+.timing-breakdown {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timing-breakdown li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #2b3b4f;
+  font-size: 0.82rem;
+}
+
+.timing-breakdown li strong {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .notes-panel ul {
