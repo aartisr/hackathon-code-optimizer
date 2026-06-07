@@ -1,15 +1,20 @@
 # Code Optimizer Studio
 
-Code Optimizer Studio is a browser-only code optimization playground designed for classrooms, clubs, and quick local demos. Users paste source code, choose optimization goals, and receive an improved version plus a short change summary.
+Code Optimizer Studio is a code optimization playground designed for classrooms, clubs, and quick demos. Users paste source code, choose optimization settings, and receive an improved version with source transparency and timing breakdown.
 
-No backend service is required.
+The app supports two inference paths:
+
+- Browser inference (WebGPU + WebLLM)
+- Python backend inference (FastAPI)
 
 ## What This App Does
 
-- Runs model inference directly in the browser using WebLLM when supported.
-- Attempts a primary model first, then automatically falls back to a smaller model.
-- Provides an always-available local heuristic optimizer when model inference is unavailable.
-- Shows both transformed code and user-friendly quality/impact scoring.
+- Supports `Inference Engine` switching between Browser and Backend API.
+- Runs model inference in browser using WebLLM when Browser mode is selected.
+- Supports safe runtime modes (`Auto`, `TinyLlama only`, `Local only`) for stability.
+- Supports performance modes (`Fast`, `Balanced`, `Quality`) for latency/quality tuning.
+- Provides local heuristic optimization fallback when model/API output is unavailable.
+- Shows transformed code, quality/impact scores, result source, and phase-by-phase timing.
 
 ## Model Strategy
 
@@ -29,6 +34,11 @@ Runtime behavior:
 
 ```text
 .
+├── .gitignore
+├── backend
+│  ├── app.py
+│  ├── download_models.py
+│  └── requirements.txt
 ├── index.html
 ├── README.md
 ├── package.json
@@ -39,6 +49,9 @@ Runtime behavior:
 
 ### File Responsibilities
 
+- `backend/app.py`: FastAPI backend API (`/health`, `/optimize`) for server-side optimization.
+- `backend/download_models.py`: one-time model downloader/cacher for backend model artifacts.
+- `backend/requirements.txt`: Python dependencies for backend and model download tooling.
 - `index.html`: semantic UI structure and control elements.
 - `src/styles.css`: visual system, responsive layout, and component styling.
 - `src/main.js`: full runtime logic (model loading, prompt creation, optimization pipeline, UI rendering).
@@ -46,7 +59,7 @@ Runtime behavior:
 ## Run Locally
 
 ```bash
-npm run dev
+npm run dev:web
 ```
 
 Open:
@@ -96,17 +109,30 @@ npm run dev:web
 
 The app will call `POST /optimize` and display source/timing metadata from the backend response.
 
+## UI Controls Overview
+
+- `Inference Engine`: choose Browser or Backend API execution.
+- `Backend URL`: backend base URL used when Inference Engine is Backend.
+- `Runtime Mode`: browser path selection (auto / tiny-only / local-only).
+- `Performance`: latency-vs-quality tradeoff.
+- `Result source`: explicitly shows where output came from.
+- `Response Time`: shows total plus phase timing (model load, generation, post-process, local optimize).
+
 ## Runtime Flow
 
 1. App boots and caches element references.
 2. Sample code is inserted into the input editor.
-3. User selects language/goal and triggers optimization.
-4. App attempts model run (or local fallback).
-5. Parsed result updates:
-   - optimized code panel
-   - change list
-   - quality score
-   - impact score
+3. User selects inference, runtime, performance, language, and goal.
+4. App runs optimization through selected engine (backend or browser).
+5. App applies parsing/validation/fallback logic.
+6. Parsed result updates:
+
+- optimized code panel
+- change list
+- quality score
+- impact score
+- result source label
+- timing breakdown
 
 ## Core Functions (`src/main.js`)
 
@@ -250,6 +276,15 @@ These are intentionally simple and may not cover edge cases in every language.
 Without WebGPU, the app remains functional in local review mode.
 
 ## Troubleshooting
+
+### Browser shows insufficient memory
+
+Recommended order:
+
+1. Switch `Inference Engine` to `Backend API (Python)`.
+2. If staying in browser mode, use `Runtime Mode: TinyLlama only`.
+3. Use `Performance: Fast` for lower token budgets.
+4. Use `Runtime Mode: Local review only` for guaranteed no-model path.
 
 ### Status stays in local review mode
 
