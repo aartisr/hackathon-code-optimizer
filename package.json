@@ -1,0 +1,10 @@
+{
+  "name": "code-optimizer-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based code optimizer powered by Phi-3 Mini with TinyLlama fallback.",
+  "scripts": {
+    "dev": "python3 -m http.server 5179",
+    "start": "python3 -m http.server 5179"
+  }
+}

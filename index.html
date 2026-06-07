@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Code Optimizer Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Browser SLM code review</p>
+          <h1>Circuit - Code Optimizer</h1>
+          <p class="lede">Paste code, let Phi-3 Mini evaluate it in your browser, then compare a cleaner version with the exact changes explained.</p>
+        </div>
+        <div class="model-card" aria-live="polite">
+          <div class="status-row">
+            <span id="modelDot" class="status-dot"></span>
+            <span id="modelStatus">Model idle</span>
+          </div>
+          <div class="meter">
+            <span id="modelProgress"></span>
+          </div>
+          <div class="model-meta">
+            <span id="activeModel">Primary: Phi-3 Mini</span>
+            <button id="loadModelButton" type="button">Load model</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-strip" aria-label="Optimizer controls">
+        <label>
+          Sample Library
+          <select id="sampleSelect" aria-label="Choose a sample code snippet">
+            <option value="0">1. JavaScript cart total</option>
+            <option value="1">2. JavaScript duplicate cleanup</option>
+            <option value="2">3. JavaScript array filtering</option>
+            <option value="3">4. TypeScript score summary</option>
+            <option value="4">5. Python order summary</option>
+            <option value="5">6. Python active users report</option>
+            <option value="6">7. Java invoice sum</option>
+            <option value="7">8. C++ positive counter</option>
+            <option value="8">9. HTML/CSS profile card</option>
+            <option value="9">10. JavaScript search helper</option>
+          </select>
+        </label>
+        <label>
+          Language
+          <select id="languageSelect">
+            <option>Auto detect</option>
+            <option>JavaScript</option>
+            <option>Python</option>
+            <option>TypeScript</option>
+            <option>Java</option>
+            <option>C++</option>
+            <option>HTML/CSS</option>
+          </select>
+        </label>
+        <label>
+          Goal
+          <select id="goalSelect">
+            <option>Balanced cleanup</option>
+            <option>Performance</option>
+            <option>Readability</option>
+            <option>Bug-risk reduction</option>
+            <option>Memory efficiency</option>
+          </select>
+        </label>
+        <label class="toggle">
+          <input id="strictMode" type="checkbox" checked />
+          Preserve behavior
+        </label>
+        <button id="sampleButton" type="button" class="secondary">Load sample</button>
+        <button id="optimizeButton" type="button" class="primary">Optimize code</button>
+      </section>
+
+      <section class="workspace" aria-label="Code comparison workspace">
+        <article class="editor-panel">
+          <header>
+            <div>
+              <p>Before</p>
+              <h2>Input Code</h2>
+            </div>
+            <span id="inputStats">0 lines</span>
+          </header>
+          <textarea id="inputCode" spellcheck="false" placeholder="Paste code here..."></textarea>
+        </article>
+
+        <article class="editor-panel">
+          <header>
+            <div>
+              <p>After</p>
+              <h2>Optimized Code</h2>
+            </div>
+            <button id="copyButton" type="button" class="icon-button" title="Copy optimized code" aria-label="Copy optimized code">
+              Copy
+            </button>
+          </header>
+          <pre id="outputCode" tabindex="0"><code>Optimized code will appear here.</code></pre>
+        </article>
+      </section>
+
+      <section class="insights-grid" aria-label="Optimization insights">
+        <article class="score-panel">
+          <p>Quality Score</p>
+          <strong id="qualityScore">--</strong>
+          <span id="qualityLabel">Awaiting analysis</span>
+        </article>
+        <article class="score-panel">
+          <p>Estimated Impact</p>
+          <strong id="impactScore">--</strong>
+          <span id="impactLabel">No run yet</span>
+        </article>
+        <article class="notes-panel">
+          <div class="notes-header">
+            <h2>What Changed</h2>
+            <span id="engineBadge">Local review ready</span>
+          </div>
+          <ul id="changeList">
+            <li>Run an optimization to see specific improvements.</li>
+          </ul>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

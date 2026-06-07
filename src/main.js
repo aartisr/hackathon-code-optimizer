@@ -1,0 +1,550 @@
+/**
+ * Browser model identifiers used by WebLLM.
+ * Phi-3 is attempted first, then TinyLlama as an automatic fallback.
+ */
+const PHI_MODEL = "Phi-3-mini-4k-instruct-q4f16_1-MLC";
+const TINY_MODEL = "TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC";
+
+/**
+ * Cached DOM references used throughout the app.
+ * Keeping these in one object avoids repeated querySelector calls.
+ */
+const els = {
+  activeModel: document.querySelector("#activeModel"),
+  changeList: document.querySelector("#changeList"),
+  copyButton: document.querySelector("#copyButton"),
+  engineBadge: document.querySelector("#engineBadge"),
+  goalSelect: document.querySelector("#goalSelect"),
+  impactLabel: document.querySelector("#impactLabel"),
+  impactScore: document.querySelector("#impactScore"),
+  inputCode: document.querySelector("#inputCode"),
+  inputStats: document.querySelector("#inputStats"),
+  languageSelect: document.querySelector("#languageSelect"),
+  loadModelButton: document.querySelector("#loadModelButton"),
+  modelDot: document.querySelector("#modelDot"),
+  modelProgress: document.querySelector("#modelProgress"),
+  modelStatus: document.querySelector("#modelStatus"),
+  optimizeButton: document.querySelector("#optimizeButton"),
+  outputCode: document.querySelector("#outputCode code"),
+  qualityLabel: document.querySelector("#qualityLabel"),
+  qualityScore: document.querySelector("#qualityScore"),
+  sampleButton: document.querySelector("#sampleButton"),
+  sampleSelect: document.querySelector("#sampleSelect"),
+  strictMode: document.querySelector("#strictMode")
+};
+
+/** @type {any | null} WebLLM engine instance once loaded. */
+let engine = null;
+/** @type {string} Current model id being used by the engine. */
+let activeModelId = PHI_MODEL;
+/** @type {"model" | "local"} Whether responses come from model inference or local heuristics. */
+let engineMode = "local";
+/** @type {boolean} Prevents repeated auto-load attempts unless the user forces reload. */
+let modelAttempted = false;
+
+/**
+ * Library of intentionally non-optimized examples users can load and optimize.
+ */
+const sampleLibrary = [
+  {
+    language: "JavaScript",
+    code: `function calculateTotal(items) {
+  var total = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].active == true) {
+      total = total + items[i].price * items[i].quantity;
+    }
+  }
+  return total;
+}
+
+console.log(calculateTotal(cartItems));`
+  },
+  {
+    language: "JavaScript",
+    code: `function cleanup(values) {
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    if (values[i] != null) {
+      if (out.indexOf(values[i]) == -1) {
+        out.push(values[i]);
+      }
+    }
+  }
+  return out;
+}`
+  },
+  {
+    language: "JavaScript",
+    code: `function getOpenTickets(tickets) {
+  var result = [];
+  for (var i = 0; i < tickets.length; i++) {
+    if (tickets[i].closed == false) {
+      if (tickets[i].priority == "high" || tickets[i].priority == "urgent") {
+        result.push(tickets[i]);
+      }
+    }
+  }
+  return result;
+}`
+  },
+  {
+    language: "TypeScript",
+    code: `type ScoreRow = { name: string; score: number; active: boolean };
+
+function summarize(rows: ScoreRow[]) {
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].active === true) {
+      total = total + rows[i].score;
+      count = count + 1;
+    }
+  }
+  const average = count == 0 ? 0 : total / count;
+  return { total, count, average };
+}`
+  },
+  {
+    language: "Python",
+    code: `def summarize_orders(orders):
+    total = 0
+    high_value = []
+    i = 0
+    while i < len(orders):
+        if orders[i]["paid"] == True:
+            total = total + orders[i]["amount"]
+            if orders[i]["amount"] > 100:
+                high_value.append(orders[i])
+        i = i + 1
+    return {"total": total, "high_value": high_value}`
+  },
+  {
+    language: "Python",
+    code: `def active_user_names(users):
+    names = []
+    for i in range(0, len(users)):
+        if users[i]["disabled"] == False:
+            if users[i]["name"] != "":
+                names.append(users[i]["name"].strip())
+    return names`
+  },
+  {
+    language: "Java",
+    code: `public static double invoiceTotal(List<Item> items) {
+    double total = 0;
+    for (int i = 0; i < items.size(); i++) {
+      Item item = items.get(i);
+      if (item.isEnabled() == true) {
+        total = total + item.getPrice() * item.getQuantity();
+      }
+    }
+    return total;
+  }`
+  },
+  {
+    language: "C++",
+    code: `int countPositive(const std::vector<int>& nums) {
+    int total = 0;
+    for (int i = 0; i < nums.size(); i++) {
+      if (nums[i] > 0) {
+        total = total + 1;
+      }
+    }
+    return total;
+  }`
+  },
+  {
+    language: "HTML/CSS",
+    code: `<div class="card" style="padding: 16px; border: 1px solid #ddd; border-radius: 6px;">
+  <h3 style="margin: 0; color: #333333;">Team Member</h3>
+  <p style="margin-top: 12px; margin-bottom: 12px; color: #333333;">Frontend Engineer</p>
+  <button style="background: #0a66ff; color: white; border: 0; border-radius: 4px; padding: 8px 12px;">View Profile</button>
+</div>`
+  },
+  {
+    language: "JavaScript",
+    code: `function searchUsers(users, query) {
+  var matches = [];
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].name.toLowerCase().indexOf(query.toLowerCase()) != -1) {
+      if (users[i].active == true) {
+        matches.push(users[i]);
+      }
+    }
+  }
+  return matches;
+}`
+  }
+];
+
+/**
+ * Loads one sample snippet from the library into the editor and syncs controls.
+ *
+ * @param {number} index Sample index in sampleLibrary.
+ */
+function loadSample(index) {
+  const safeIndex = Number.isInteger(index) ? Math.max(0, Math.min(sampleLibrary.length - 1, index)) : 0;
+  const sample = sampleLibrary[safeIndex];
+
+  if (!sample) return;
+
+  els.inputCode.value = sample.code;
+  els.sampleSelect.value = String(safeIndex);
+
+  if ([...els.languageSelect.options].some((option) => option.textContent === sample.language)) {
+    els.languageSelect.value = sample.language;
+  }
+
+  updateInputStats();
+  els.inputCode.focus();
+}
+
+/**
+ * Updates the model status indicators shown in the hero card.
+ *
+ * @param {"loading" | "ready" | "error"} kind Visual state for the status dot.
+ * @param {string} text Human-readable status message.
+ * @param {number | null} [progress=null] Optional 0-100 progress value for the meter.
+ */
+function setModelState(kind, text, progress = null) {
+  els.modelDot.className = `status-dot ${kind === "ready" ? "ready" : kind === "error" ? "error" : ""}`;
+  els.modelStatus.textContent = text;
+  if (progress !== null) {
+    els.modelProgress.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  }
+}
+
+/**
+ * Recomputes and renders line/character stats for the input editor.
+ */
+function updateInputStats() {
+  const lines = els.inputCode.value ? els.inputCode.value.split("\n").length : 0;
+  const chars = els.inputCode.value.length;
+  els.inputStats.textContent = `${lines} line${lines === 1 ? "" : "s"} · ${chars} chars`;
+}
+
+/**
+ * Attempts to parse model output into the expected JSON result contract.
+ * Falls back to free-form parsing if strict JSON is not returned.
+ *
+ * @param {string} text Raw text returned by the model.
+ * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
+ */
+function parseModelResponse(text) {
+  const clean = text.trim();
+  const jsonStart = clean.indexOf("{");
+  const jsonEnd = clean.lastIndexOf("}");
+
+  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+    try {
+      const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd + 1));
+      return {
+        optimizedCode: parsed.optimizedCode || parsed.code || clean,
+        changes: Array.isArray(parsed.changes) ? parsed.changes : [],
+        qualityScore: Number(parsed.qualityScore) || 82,
+        impactScore: Number(parsed.impactScore) || 68
+      };
+    } catch {
+      return fallbackParse(clean);
+    }
+  }
+
+  return fallbackParse(clean);
+}
+
+/**
+ * Best-effort parser for non-JSON model output.
+ * Supports fenced code blocks and provides default score/change metadata.
+ *
+ * @param {string} text Free-form model output.
+ * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
+ */
+function fallbackParse(text) {
+  const codeMatch = text.match(/```(?:\w+)?\n([\s\S]*?)```/);
+  return {
+    optimizedCode: codeMatch ? codeMatch[1].trim() : text,
+    changes: [
+      "The model returned a free-form optimization. Review the diff before using it.",
+      "Formatting and naming may have been adjusted for readability."
+    ],
+    qualityScore: 78,
+    impactScore: 58
+  };
+}
+
+/**
+ * Creates a short, user-facing explanation for model loading failures.
+ *
+ * @param {unknown} error Original exception thrown by WebLLM/model fetch.
+ * @returns {string}
+ */
+function describeModelLoadError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("403") || normalized.includes("forbidden") || normalized.includes("huggingface.co")) {
+    return "Model files blocked by network policy (HTTP 403 from Hugging Face).";
+  }
+
+  if (normalized.includes("failed to fetch") || normalized.includes("network")) {
+    return "Model download failed due to a network connectivity issue.";
+  }
+
+  if (normalized.includes("out of memory") || normalized.includes("memory")) {
+    return "Model failed to load due to device memory constraints.";
+  }
+
+  return "Model initialization failed in this browser session.";
+}
+
+/**
+ * Loads a browser-local model engine if supported.
+ *
+ * Flow:
+ * 1) Skip if already loaded.
+ * 2) Abort to local mode if WebGPU is unavailable.
+ * 3) Attempt Phi-3, then fallback to TinyLlama.
+ * 4) Keep UI status in sync throughout loading.
+ *
+ * @param {boolean} [force=false] When true, allows a fresh attempt after a previous failure.
+ * @returns {Promise<any | null>} Active engine when available; otherwise null for local mode.
+ */
+async function loadModel(force = false) {
+  if (engine) return engine;
+  if (modelAttempted && !force) return null;
+  modelAttempted = true;
+
+  if (!("gpu" in navigator)) {
+    setModelState("error", "WebGPU unavailable. Local review mode active.", 0);
+    els.engineBadge.textContent = "Local review mode";
+    return null;
+  }
+
+  els.loadModelButton.disabled = true;
+  setModelState("loading", "Loading Phi-3 Mini in browser...", 8);
+
+  try {
+    const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+    const createEngine = webllm.CreateMLCEngine || webllm.CreateWebWorkerMLCEngine;
+    engine = await createEngine(PHI_MODEL, {
+      initProgressCallback: (report) => {
+        const progress = report.progress ? Math.round(report.progress * 100) : 18;
+        setModelState("loading", report.text || "Downloading Phi-3 Mini...", progress);
+      }
+    });
+    activeModelId = PHI_MODEL;
+    engineMode = "model";
+    els.activeModel.textContent = "Active: Phi-3 Mini";
+    els.engineBadge.textContent = "Phi-3 Mini";
+    setModelState("ready", "Phi-3 Mini ready", 100);
+    return engine;
+  } catch (phiError) {
+    const phiReason = describeModelLoadError(phiError);
+    console.error("Phi-3 model load failed:", phiError);
+    setModelState("loading", "Phi-3 failed. Trying TinyLlama...", 25);
+    try {
+      const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+      const createEngine = webllm.CreateMLCEngine || webllm.CreateWebWorkerMLCEngine;
+      engine = await createEngine(TINY_MODEL, {
+        initProgressCallback: (report) => {
+          const progress = report.progress ? Math.round(report.progress * 100) : 30;
+          setModelState("loading", report.text || "Downloading TinyLlama...", progress);
+        }
+      });
+      activeModelId = TINY_MODEL;
+      engineMode = "model";
+      els.activeModel.textContent = "Active: TinyLlama fallback";
+      els.engineBadge.textContent = "TinyLlama";
+      setModelState("ready", "TinyLlama ready", 100);
+      return engine;
+    } catch (tinyError) {
+      const tinyReason = describeModelLoadError(tinyError);
+      console.error("TinyLlama model load failed:", tinyError);
+      engineMode = "local";
+      els.engineBadge.textContent = "Local review mode";
+      setModelState("error", `${tinyReason} Local review mode active.`, 0);
+      els.changeList.innerHTML = `
+        <li>${phiReason}</li>
+        <li>${tinyReason}</li>
+        <li>Using local review mode until model access is restored.</li>
+      `;
+      return null;
+    }
+  } finally {
+    els.loadModelButton.disabled = false;
+  }
+}
+
+/**
+ * Builds a deterministic instruction prompt for the model run.
+ *
+ * @param {string} code User-provided source code.
+ * @returns {string} Prompt containing goals, constraints, and response schema.
+ */
+function buildPrompt(code) {
+  return `You are a senior code optimizer. Optimize the user's code while preserving behavior.
+
+Language: ${els.languageSelect.value}
+Goal: ${els.goalSelect.value}
+Preserve behavior strictly: ${els.strictMode.checked ? "yes" : "no"}
+
+Return only valid JSON with this shape:
+{
+  "optimizedCode": "the complete optimized code",
+  "changes": ["specific change 1", "specific change 2", "specific change 3"],
+  "qualityScore": 0-100,
+  "impactScore": 0-100
+}
+
+Code:
+\`\`\`
+${code}
+\`\`\``;
+}
+
+/**
+ * Runs model-based optimization when possible, otherwise falls back to local analysis.
+ *
+ * @param {string} code User-provided source code.
+ * @returns {Promise<{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }>}
+ */
+async function runModelOptimization(code) {
+  const loadedEngine = await loadModel();
+  if (!loadedEngine) return runLocalOptimization(code);
+
+  setModelState("loading", `Optimizing with ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}...`, 100);
+  const response = await loadedEngine.chat.completions.create({
+    messages: [
+      { role: "system", content: "You optimize code and return strict JSON only." },
+      { role: "user", content: buildPrompt(code) }
+    ],
+    temperature: 0.2,
+    max_tokens: 1800
+  });
+  setModelState("ready", `${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"} ready`, 100);
+  return parseModelResponse(response.choices?.[0]?.message?.content || "");
+}
+
+/**
+ * Performs lightweight regex-based optimization when model inference is not available.
+ *
+ * This pass intentionally applies conservative transformations aimed at common
+ * readability and safety wins without deep semantic rewrites.
+ *
+ * @param {string} code User-provided source code.
+ * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
+ */
+function runLocalOptimization(code) {
+  let optimized = code;
+  const changes = [];
+
+  if (/\bvar\b/.test(optimized)) {
+    optimized = optimized.replace(/\bvar\b/g, "let");
+    changes.push("Replaced legacy var declarations with block-scoped let.");
+  }
+
+  if (/(^|[^=!])==(?!=)/.test(optimized) || /(^|[^=!])!=(?!=)/.test(optimized)) {
+    optimized = optimized
+      .replace(/(^|[^=!])==(?!=)/g, "$1===")
+      .replace(/(^|[^=!])!=(?!=)/g, "$1!==");
+    changes.push("Replaced loose equality checks with strict comparisons.");
+  }
+
+  if (/= [^;\n]+ \+ /.test(optimized)) {
+    optimized = optimized.replace(/(\w+)\s*=\s*\1\s*\+\s*/g, "$1 += ");
+    changes.push("Simplified repeated assignment into compound assignment.");
+  }
+
+  if (/if\s*\(([^)]*)\s*===\s*true\)/g.test(optimized)) {
+    optimized = optimized.replace(/if\s*\(([^)]*)\s*===\s*true\)/g, (_, expression) => `if (${expression.trim()})`);
+    changes.push("Removed redundant boolean comparison.");
+  }
+
+  if (/for\s*\(let i = 0; i < ([^.]+)\.length; i\+\+\)/.test(optimized)) {
+    changes.push("Detected index-based looping; a model pass may convert this to iteration helpers when behavior is safe.");
+  }
+
+  if (!changes.length) {
+    changes.push("Code is already compact enough for the local reviewer. Load the model for deeper semantic optimization.");
+  }
+
+  const qualityScore = Math.min(94, 66 + changes.length * 7 + Math.round(code.length > 120 ? 8 : 0));
+  const impactScore = Math.min(88, 42 + changes.length * 10);
+
+  return { optimizedCode: optimized, changes, qualityScore, impactScore };
+}
+
+/**
+ * Renders optimization results into the right-side code panel and insight cards.
+ *
+ * @param {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }} result
+ */
+function renderResults(result) {
+  els.outputCode.textContent = result.optimizedCode || "No optimized code returned.";
+  els.changeList.innerHTML = "";
+  result.changes.slice(0, 8).forEach((change) => {
+    const item = document.createElement("li");
+    item.textContent = change;
+    els.changeList.appendChild(item);
+  });
+  els.qualityScore.textContent = Math.round(result.qualityScore);
+  els.impactScore.textContent = Math.round(result.impactScore);
+  els.qualityLabel.textContent = result.qualityScore >= 85 ? "Strong result" : result.qualityScore >= 70 ? "Useful improvement" : "Needs review";
+  els.impactLabel.textContent = result.impactScore >= 75 ? "High value" : result.impactScore >= 50 ? "Moderate value" : "Light cleanup";
+}
+
+/**
+ * Main click handler for the optimize action.
+ * Guards empty input, shows transient working UI, and always re-enables controls.
+ *
+ * @returns {Promise<void>}
+ */
+async function optimizeCode() {
+  const code = els.inputCode.value.trim();
+  if (!code) {
+    els.inputCode.focus();
+    return;
+  }
+
+  els.optimizeButton.disabled = true;
+  els.outputCode.textContent = "Analyzing and optimizing...";
+  els.changeList.innerHTML = "<li>Working through structure, readability, and behavior-preserving changes.</li>";
+
+  try {
+    const result = engineMode === "model" ? await runModelOptimization(code) : await runModelOptimization(code);
+    renderResults(result);
+  } catch (error) {
+    const result = runLocalOptimization(code);
+    renderResults(result);
+    els.engineBadge.textContent = "Local review mode";
+    setModelState("error", "Model run failed. Local review shown.", 0);
+  } finally {
+    els.optimizeButton.disabled = false;
+  }
+}
+
+/**
+ * Event wiring and initial UI bootstrap.
+ */
+els.inputCode.addEventListener("input", updateInputStats);
+els.loadModelButton.addEventListener("click", () => loadModel(true));
+els.optimizeButton.addEventListener("click", optimizeCode);
+els.sampleSelect.addEventListener("change", (event) => {
+  const target = event.target;
+  const selectedIndex = Number(target.value || 0);
+  loadSample(selectedIndex);
+});
+els.sampleButton.addEventListener("click", () => {
+  const selectedIndex = Number(els.sampleSelect.value || 0);
+  loadSample(selectedIndex);
+});
+els.copyButton.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(els.outputCode.textContent);
+  els.copyButton.textContent = "Copied";
+  setTimeout(() => {
+    els.copyButton.textContent = "Copy";
+  }, 1200);
+});
+
+loadSample(0);
