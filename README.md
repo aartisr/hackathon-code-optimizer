@@ -103,6 +103,8 @@ npm run dev:web
 
 ### Use Backend In UI
 
+Backend is now the default inference engine in the UI.
+
 1. Set `Inference Engine` to `Backend API (Python)`.
 2. Keep `Backend URL` as `http://127.0.0.1:8000` (or change it if hosted elsewhere).
 3. Click `Optimize code`.

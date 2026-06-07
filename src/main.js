@@ -425,8 +425,10 @@ function syncInferenceModeUI() {
     setModelState("ready", "Backend API mode enabled", 100);
     els.engineBadge.textContent = "Backend API";
     els.activeModel.textContent = "Source: Python backend";
+    els.loadModelButton.textContent = "Load model";
   } else {
     els.engineBadge.textContent = "Browser runtime";
+    els.loadModelButton.textContent = "Load browser model";
     if (!engine) {
       setModelState("loading", "Browser model idle", 0);
       els.activeModel.textContent = "Primary: Phi-3 Mini";
