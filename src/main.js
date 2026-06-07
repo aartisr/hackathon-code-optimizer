@@ -28,6 +28,7 @@ const els = {
   outputCode: document.querySelector("#outputCode code"),
   qualityLabel: document.querySelector("#qualityLabel"),
   qualityScore: document.querySelector("#qualityScore"),
+  resultSource: document.querySelector("#resultSource"),
   runtimeMode: document.querySelector("#runtimeMode"),
   safeModeBanner: document.querySelector("#safeModeBanner"),
   enableSafeModeButton: document.querySelector("#enableSafeModeButton"),
@@ -228,13 +229,69 @@ function updateInputStats() {
 }
 
 /**
+ * Checks whether text is valid JSON containing only optimizedCode.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isStrictOptimizedCodeJson(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const keys = Object.keys(parsed);
+    return keys.length === 1 && keys[0] === "optimizedCode" && typeof parsed.optimizedCode === "string";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Heuristic check that distinguishes likely code from prose-only model output.
+ *
+ * @param {string} text Candidate optimized code text.
+ * @returns {boolean}
+ */
+function looksLikeCode(text) {
+  const candidate = (text || "").trim();
+  if (!candidate) return false;
+
+  const prosePattern = /(as a senior code optimizer|i propose the following steps|by following these steps)/i;
+  if (prosePattern.test(candidate)) return false;
+
+  const codeSignalPattern = /[{}();=]|\b(function|const|let|var|def|class|return|if|for|while|public|static|import)\b/;
+  return codeSignalPattern.test(candidate);
+}
+
+/**
+ * Uses local optimization when model output is not valid/usable code.
+ *
+ * @param {string} sourceCode Original user input.
+ * @param {string} reason Message describing why fallback was applied.
+ * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
+ */
+function localFallbackForInvalidModelOutput(sourceCode, reason) {
+  const localResult = runLocalOptimization(sourceCode);
+  return {
+    ...localResult,
+    source: "local-fallback",
+    sourceLabel: `Local fallback: ${reason}`,
+    changes: [
+      reason,
+      ...localResult.changes
+    ]
+  };
+}
+
+/**
  * Attempts to parse model output into the expected JSON result contract.
  * Falls back to free-form parsing if strict JSON is not returned.
  *
  * @param {string} text Raw text returned by the model.
  * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
  */
-function parseModelResponse(text) {
+function parseModelResponse(text, sourceCode) {
   const clean = text.trim();
   const jsonStart = clean.indexOf("{");
   const jsonEnd = clean.lastIndexOf("}");
@@ -242,18 +299,30 @@ function parseModelResponse(text) {
   if (jsonStart >= 0 && jsonEnd > jsonStart) {
     try {
       const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd + 1));
-      return {
+      const modelChanges = Array.isArray(parsed.changes) ? parsed.changes : [];
+      const modelResult = {
         optimizedCode: parsed.optimizedCode || parsed.code || clean,
-        changes: Array.isArray(parsed.changes) ? parsed.changes : [],
+        changes: modelChanges.length ? modelChanges : ["Applied model optimization."],
         qualityScore: Number(parsed.qualityScore) || 82,
-        impactScore: Number(parsed.impactScore) || 68
+        impactScore: Number(parsed.impactScore) || 68,
+        source: "model",
+        sourceLabel: "Model output (strict JSON)"
       };
+
+      if (!looksLikeCode(modelResult.optimizedCode)) {
+        return localFallbackForInvalidModelOutput(
+          sourceCode,
+          "Model returned planning prose instead of executable code. Applied local optimization fallback."
+        );
+      }
+
+      return modelResult;
     } catch {
-      return fallbackParse(clean);
+      return fallbackParse(clean, sourceCode);
     }
   }
 
-  return fallbackParse(clean);
+  return fallbackParse(clean, sourceCode);
 }
 
 /**
@@ -263,16 +332,27 @@ function parseModelResponse(text) {
  * @param {string} text Free-form model output.
  * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
  */
-function fallbackParse(text) {
+function fallbackParse(text, sourceCode) {
   const codeMatch = text.match(/```(?:\w+)?\n([\s\S]*?)```/);
+  const extractedCode = codeMatch ? codeMatch[1].trim() : text;
+
+  if (!looksLikeCode(extractedCode)) {
+    return localFallbackForInvalidModelOutput(
+      sourceCode,
+      "Model response was not in a usable code format. Applied local optimization fallback."
+    );
+  }
+
   return {
-    optimizedCode: codeMatch ? codeMatch[1].trim() : text,
+    optimizedCode: extractedCode,
     changes: [
       "The model returned a free-form optimization. Review the diff before using it.",
       "Formatting and naming may have been adjusted for readability."
     ],
     qualityScore: 78,
-    impactScore: 58
+    impactScore: 58,
+    source: "model-freeform",
+    sourceLabel: "Model output (free-form parse)"
   };
 }
 
@@ -477,18 +557,59 @@ Language: ${els.languageSelect.value}
 Goal: ${els.goalSelect.value}
 Preserve behavior strictly: ${els.strictMode.checked ? "yes" : "no"}
 
-Return only valid JSON with this shape:
+CRITICAL OUTPUT FORMAT RULES:
+- Return ONLY a valid JSON object.
+- No markdown fences.
+- No preface or explanation.
+- No extra keys.
+
+Return exactly this JSON shape:
 {
-  "optimizedCode": "the complete optimized code",
-  "changes": ["specific change 1", "specific change 2", "specific change 3"],
-  "qualityScore": 0-100,
-  "impactScore": 0-100
+  "optimizedCode": "the complete optimized code"
 }
 
 Code:
 \`\`\`
 ${code}
 \`\`\``;
+}
+
+/**
+ * Requests a strict JSON-only correction when the first model reply drifts.
+ *
+ * @param {any} loadedEngine
+ * @param {string} code
+ * @param {string} priorResponse
+ * @returns {Promise<string>}
+ */
+async function requestStrictJsonCorrection(loadedEngine, code, priorResponse) {
+  const correction = await loadedEngine.chat.completions.create({
+    messages: [
+      { role: "system", content: "You convert drafts into strict JSON output only." },
+      {
+        role: "user",
+        content: `Rewrite your previous answer into strict JSON only.
+
+Rules:
+- Output must be valid JSON object.
+- Output must contain only this key: optimizedCode.
+- No markdown.
+- No explanation.
+
+Source code:
+\`\`\`
+${code}
+\`\`\`
+
+Previous answer:
+${priorResponse}`
+      }
+    ],
+    temperature: 0,
+    max_tokens: 1800
+  });
+
+  return correction.choices?.[0]?.message?.content || "";
 }
 
 /**
@@ -499,7 +620,9 @@ ${code}
  */
 async function runModelOptimization(code) {
   const loadedEngine = await loadModel();
-  if (!loadedEngine) return runLocalOptimization(code);
+  if (!loadedEngine) {
+    return runLocalOptimization(code, "Model unavailable in current runtime mode.");
+  }
 
   setModelState("loading", `Optimizing with ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}...`, 100);
   const response = await loadedEngine.chat.completions.create({
@@ -507,11 +630,23 @@ async function runModelOptimization(code) {
       { role: "system", content: "You optimize code and return strict JSON only." },
       { role: "user", content: buildPrompt(code) }
     ],
-    temperature: 0.2,
+    temperature: 0,
     max_tokens: 1800
   });
+
+  let modelText = response.choices?.[0]?.message?.content || "";
+  let usedCorrection = false;
+  if (!isStrictOptimizedCodeJson(modelText)) {
+    usedCorrection = true;
+    modelText = await requestStrictJsonCorrection(loadedEngine, code, modelText);
+  }
+
   setModelState("ready", `${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"} ready`, 100);
-  return parseModelResponse(response.choices?.[0]?.message?.content || "");
+  const result = parseModelResponse(modelText, code);
+  if (usedCorrection && result.source && result.source.startsWith("model")) {
+    result.sourceLabel = "Model output (strict JSON after correction pass)";
+  }
+  return result;
 }
 
 /**
@@ -523,7 +658,7 @@ async function runModelOptimization(code) {
  * @param {string} code User-provided source code.
  * @returns {{ optimizedCode: string, changes: string[], qualityScore: number, impactScore: number }}
  */
-function runLocalOptimization(code) {
+function runLocalOptimization(code, reason = "Local heuristic optimization (no model).") {
   let optimized = code;
   const changes = [];
 
@@ -560,7 +695,14 @@ function runLocalOptimization(code) {
   const qualityScore = Math.min(94, 66 + changes.length * 7 + Math.round(code.length > 120 ? 8 : 0));
   const impactScore = Math.min(88, 42 + changes.length * 10);
 
-  return { optimizedCode: optimized, changes, qualityScore, impactScore };
+  return {
+    optimizedCode: optimized,
+    changes,
+    qualityScore,
+    impactScore,
+    source: "local",
+    sourceLabel: reason
+  };
 }
 
 /**
@@ -580,6 +722,7 @@ function renderResults(result) {
   els.impactScore.textContent = Math.round(result.impactScore);
   els.qualityLabel.textContent = result.qualityScore >= 85 ? "Strong result" : result.qualityScore >= 70 ? "Useful improvement" : "Needs review";
   els.impactLabel.textContent = result.impactScore >= 75 ? "High value" : result.impactScore >= 50 ? "Moderate value" : "Light cleanup";
+  els.resultSource.textContent = result.sourceLabel || "Unknown source";
 }
 
 /**

@@ -423,6 +423,17 @@ pre {
   list-style: none;
 }
 
+.result-source {
+  margin: 14px 0 0;
+  color: #2b3b4f;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.result-source strong {
+  color: var(--ink);
+}
+
 .notes-panel li {
   position: relative;
   padding-left: 24px;
