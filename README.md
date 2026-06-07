@@ -80,6 +80,77 @@ http://127.0.0.1:5179
 - `renderResults(result)`: writes transformed code and scoring to the UI.
 - `optimizeCode()`: orchestration entry point for optimize button clicks.
 
+## Exact Prompts Sent To Models
+
+The app currently sends one of the following exact prompt templates.
+
+### Standard Prompt (`buildPrompt`)
+
+```text
+You are a senior code optimizer. Optimize the user's code while preserving behavior.
+
+Language: ${els.languageSelect.value}
+Goal: ${els.goalSelect.value}
+Preserve behavior strictly: ${els.strictMode.checked ? "yes" : "no"}
+
+CRITICAL OUTPUT FORMAT RULES:
+- Return ONLY a valid JSON object.
+- No markdown fences.
+- No preface or explanation.
+- No extra keys.
+
+Return exactly this JSON shape:
+{
+  "optimizedCode": "the complete optimized code"
+}
+
+Code:
+\`\`\`
+${code}
+\`\`\`
+```
+
+### TinyLlama Prompt (`buildTinyPrompt`)
+
+```text
+Optimize this code.
+
+Requirements:
+- Preserve behavior.
+- Keep the same language.
+- Improve readability and basic efficiency.
+- Do not explain anything.
+- Return JSON only.
+
+Output format (exact):
+{"optimizedCode":"..."}
+
+Input code:
+${code}
+```
+
+### Correction Prompt (`requestStrictJsonCorrection`)
+
+This is used only if the first model response is not strict JSON.
+
+```text
+Rewrite your previous answer into strict JSON only.
+
+Rules:
+- Output must be valid JSON object.
+- Output must contain only this key: optimizedCode.
+- No markdown.
+- No explanation.
+
+Source code:
+\`\`\`
+${code}
+\`\`\`
+
+Previous answer:
+${priorResponse}
+```
+
 ## CSS Architecture Map (`src/styles.css`)
 
 Use this section to quickly find where each UI area is styled.
