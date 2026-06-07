@@ -55,7 +55,7 @@
       </section>
 
       <section class="control-strip" aria-label="Optimizer controls">
-        <label>
+        <label class="control-wide">
           Inference Engine
           <select id="inferenceMode" aria-label="Choose inference engine">
             <option value="browser">Browser (WebGPU)</option>
@@ -63,12 +63,12 @@
           </select>
           <small>Select where optimization executes.</small>
         </label>
-        <label>
+        <label class="control-wide">
           Backend URL
           <input id="backendUrl" type="url" value="http://127.0.0.1:8000" placeholder="http://127.0.0.1:8000" />
           <small>Only used in Backend API mode.</small>
         </label>
-        <label>
+        <label class="control-wide">
           Backend Model
           <select id="backendModel" aria-label="Choose backend model preference">
             <option value="auto" selected>Auto select cached model</option>
@@ -77,7 +77,7 @@
           </select>
           <small>Controls server-side model preference.</small>
         </label>
-        <label class="toggle" title="When enabled, backend must use a real local model and will fail instead of using heuristic fallback.">
+        <label class="toggle control-wide" title="When enabled, backend must use a real local model and will fail instead of using heuristic fallback.">
           <input id="requireBackendModel" type="checkbox" />
           Require backend model
         </label>
@@ -139,8 +139,10 @@
           <input id="strictMode" type="checkbox" checked />
           Preserve behavior
         </label>
-        <button id="sampleButton" type="button" class="secondary">Load sample</button>
-        <button id="optimizeButton" type="button" class="primary">Optimize code</button>
+        <div class="control-actions" aria-label="Primary actions">
+          <button id="sampleButton" type="button" class="secondary">Load sample</button>
+          <button id="optimizeButton" type="button" class="primary">Optimize code</button>
+        </div>
       </section>
 
       <section class="workspace" aria-label="Code comparison workspace">
