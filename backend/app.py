@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional, Union
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -30,10 +30,10 @@ class OptimizeRequest(BaseModel):
 
 
 class TimingBreakdown(BaseModel):
-    modelLoadMs: float | None = None
-    generationMs: float | None = None
-    postProcessMs: float | None = None
-    localOptimizeMs: float | None = None
+    modelLoadMs: Optional[float] = None
+    generationMs: Optional[float] = None
+    postProcessMs: Optional[float] = None
+    localOptimizeMs: Optional[float] = None
 
 
 class OptimizeResponse(BaseModel):
@@ -64,7 +64,7 @@ MODEL_KEYS = {
     "phi3": "microsoft/Phi-3-mini-4k-instruct",
     "tinyllama": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
 }
-_loaded_model_key: str | None = None
+_loaded_model_key: Optional[str] = None
 _loaded_tokenizer = None
 _loaded_model = None
 
@@ -78,7 +78,28 @@ def model_inference_ready(model_key: str) -> bool:
     model_dir = MODEL_CACHE_ROOT / model_key
     if not model_cached(model_key):
         return False
-    return (model_dir / "config.json").exists()
+
+    if not model_dir.exists():
+        return False
+
+    has_tokenizer = any(
+        (model_dir / file_name).exists()
+        for file_name in ["tokenizer.json", "tokenizer.model", "tokenizer_config.json"]
+    )
+    if not has_tokenizer:
+        return False
+
+    has_checkpoint = any(
+        bool(list(model_dir.glob(pattern)))
+        for pattern in [
+            "pytorch_model*.bin",
+            "*.safetensors",
+            "tf_model.h5",
+            "model.ckpt.index",
+            "flax_model.msgpack",
+        ]
+    )
+    return has_checkpoint
 
 
 def resolve_requested_model(preferred: str) -> str:
@@ -87,6 +108,9 @@ def resolve_requested_model(preferred: str) -> str:
     if preferred == "tinyllama" and model_inference_ready("tinyllama"):
         return "tinyllama"
     if preferred == "auto":
+        if torch is not None and not torch.cuda.is_available():
+            # Avoid automatically loading a large model on CPU for fast frontend response.
+            return "none"
         if model_inference_ready("phi3"):
             return "phi3"
         if model_inference_ready("tinyllama"):
@@ -117,7 +141,7 @@ def build_backend_prompt(payload: OptimizeRequest) -> str:
     )
 
 
-def extract_optimized_code(raw_text: str) -> str | None:
+def extract_optimized_code(raw_text: str) -> Optional[str]:
     text = (raw_text or "").strip()
     start = text.find("{")
     end = text.rfind("}")
@@ -141,7 +165,7 @@ def extract_optimized_code(raw_text: str) -> str | None:
     return text if text else None
 
 
-def generation_config(performance_mode: str) -> dict[str, float | int]:
+def generation_config(performance_mode: str) -> dict[str, Union[float, int]]:
     if performance_mode == "quality":
         return {"max_new_tokens": 640, "temperature": 0.3, "top_p": 0.95}
     if performance_mode == "balanced":
@@ -169,7 +193,7 @@ def get_loaded_runtime(model_key: str):
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
         local_files_only=True,
-        torch_dtype=dtype,
+        dtype=dtype,
     )
     model.eval()
     if torch.cuda.is_available():

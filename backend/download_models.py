@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,31 @@ def is_downloaded(model_key: str) -> bool:
     except json.JSONDecodeError:
         return False
 
-    return data.get("status") == "ok"
+    if data.get("status") != "ok":
+        return False
+
+    model_dir = model_cache_dir(model_key)
+    if not model_dir.exists():
+        return False
+
+    has_tokenizer = any(
+        (model_dir / file_name).exists()
+        for file_name in ["tokenizer.json", "tokenizer.model", "tokenizer_config.json"]
+    )
+    if not has_tokenizer:
+        return False
+
+    has_checkpoint = any(
+        model_dir.glob(pattern)
+        for pattern in [
+            "pytorch_model*.bin",
+            "*.safetensors",
+            "tf_model.h5",
+            "model.ckpt.index",
+            "flax_model.msgpack",
+        ]
+    )
+    return has_checkpoint
 
 
 def write_marker(model_key: str, repo_id: str) -> None:
@@ -57,6 +82,8 @@ def download_model(model_key: str, force: bool = False) -> None:
         print(f"[skip] {model_key}: already downloaded at {cache_dir}")
         return
 
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     print(f"[download] {model_key}: {repo_id}")
     snapshot_download(

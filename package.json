@@ -7,9 +7,12 @@
     "dev": "python3 -m http.server 5179",
     "start": "python3 -m http.server 5179",
     "dev:web": "python3 -m http.server 5179",
-    "dev:api": "python3 -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload",
-    "models:download": "python3 backend/download_models.py --all",
-    "models:download:phi3": "python3 backend/download_models.py --model phi3",
-    "models:download:tiny": "python3 backend/download_models.py --model tinyllama"
+    "dev:api": "backend/.venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload",
+    "install:backend": "/usr/bin/python3 -m venv backend/.venv && backend/.venv/bin/python -m pip install --upgrade pip setuptools wheel && backend/.venv/bin/python -m pip install -r backend/requirements.txt",
+    "install:backend:runtime": "backend/.venv/bin/python -m pip install -r backend/requirements-models.txt",
+    "models:download": "npm run install:backend && backend/.venv/bin/python backend/download_models.py --all",
+    "models:download:force": "npm run install:backend && backend/.venv/bin/python backend/download_models.py --all --force",
+    "models:download:phi3": "npm run install:backend && backend/.venv/bin/python backend/download_models.py --model phi3",
+    "models:download:tiny": "npm run install:backend && backend/.venv/bin/python backend/download_models.py --model tinyllama"
   }
 }

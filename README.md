@@ -77,13 +77,29 @@ This project now supports a backend inference path to avoid browser memory limit
 ### Start Backend API
 
 ```bash
-python3 -m pip install -r backend/requirements.txt
+npm run install:backend
 npm run models:download
 npm run dev:api
 ```
 
+If you want backend model inference, install the optional runtime dependencies too:
+
+```bash
+npm run install:backend:runtime
+```
+
 `npm run models:download` is a one-time setup step. It stores model artifacts under `backend/model-cache/` and skips re-download on future runs unless you force it.
 These downloads are now Transformers-compatible model repos used directly by the backend inference runtime.
+
+If you have previously downloaded older MLC-style model caches, rerun:
+
+```bash
+npm run models:download:force
+```
+
+If that still leaves stale files, remove `backend/model-cache/phi3` and `backend/model-cache/tinyllama` first.
+
+> Note: backend model inference requires a Transformers-compatible checkpoint layout (for example `pytorch_model.bin` or `model.safetensors`). MLC-style shard-only caches are not considered inference-ready.
 
 Optional targeted downloads:
 
@@ -117,7 +133,8 @@ The app will call `POST /optimize` and display source/timing metadata from the b
 Important:
 
 - The UI now includes an explicit `Model used` label for transparency.
-- Backend can run in model-required mode via `Require backend model`.
+- `Require backend model` is disabled by default to allow local heuristic fallback when the model runtime is not installed.
+- Backend can still run in strict model-required mode if you enable `Require backend model`.
 - When `Require backend model` is enabled, backend will fail fast instead of using heuristic fallback.
 - When `Require backend model` is disabled, backend may fall back to heuristic optimization if model inference fails.
 
