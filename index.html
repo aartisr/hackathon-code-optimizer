@@ -6,16 +6,16 @@
     <title>Code Optimizer Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Browser SLM code review</p>
+          <p class="eyebrow">Code Optimization Copilot</p>
           <h1>Circuit - Code Optimizer</h1>
-          <p class="lede">Paste code, let Phi-3 Mini evaluate it in your browser, then compare a cleaner version with the exact changes explained.</p>
+          <p class="lede">Choose a runtime, paste code, and get a cleaner version with transparent model/source attribution and timing diagnostics.</p>
           <div id="safeModeBanner" class="safe-mode-banner" role="status" aria-live="polite" hidden>
             <p><strong>Safe mode recommended:</strong> This device may be low on memory for Phi-3.</p>
             <button id="enableSafeModeButton" type="button" class="secondary">Enable Tiny-only mode</button>
@@ -36,6 +36,19 @@
         </div>
       </section>
 
+      <section class="guidance-strip" aria-label="Run guidance">
+        <div class="flow-steps" role="list">
+          <div class="step-chip" role="listitem"><span>1</span><p>Pick engine and model strategy</p></div>
+          <div class="step-chip" role="listitem"><span>2</span><p>Paste code or load a sample</p></div>
+          <div class="step-chip" role="listitem"><span>3</span><p>Run optimization and compare output</p></div>
+        </div>
+        <article class="mode-panel" aria-live="polite">
+          <p class="kicker">Current Run Plan</p>
+          <strong id="modeSummaryTitle">Backend model required</strong>
+          <p id="modeSummaryText">Using backend inference. Request will fail if no backend model can run.</p>
+        </article>
+      </section>
+
       <section class="control-strip" aria-label="Optimizer controls">
         <label>
           Inference Engine
@@ -43,10 +56,25 @@
             <option value="browser">Browser (WebGPU)</option>
             <option value="backend" selected>Backend API (Python)</option>
           </select>
+          <small>Select where optimization executes.</small>
         </label>
         <label>
           Backend URL
           <input id="backendUrl" type="url" value="http://127.0.0.1:8000" placeholder="http://127.0.0.1:8000" />
+          <small>Only used in Backend API mode.</small>
+        </label>
+        <label>
+          Backend Model
+          <select id="backendModel" aria-label="Choose backend model preference">
+            <option value="auto" selected>Auto select cached model</option>
+            <option value="phi3">Prefer Phi-3</option>
+            <option value="tinyllama">Prefer TinyLlama</option>
+          </select>
+          <small>Controls server-side model preference.</small>
+        </label>
+        <label class="toggle" title="When enabled, backend must use a real local model and will fail instead of using heuristic fallback.">
+          <input id="requireBackendModel" type="checkbox" checked />
+          Require backend model
         </label>
         <label>
           Sample Library
@@ -70,6 +98,7 @@
             <option value="tiny-only">TinyLlama only (safer)</option>
             <option value="local-only">Local review only (no model)</option>
           </select>
+          <small>Only used in Browser mode.</small>
         </label>
         <label>
           Performance
@@ -163,6 +192,7 @@
             <h2>What Changed</h2>
             <span id="engineBadge">Local review ready</span>
           </div>
+          <p class="result-source"><strong>Model used:</strong> <span id="modelUsed">Not run yet</span></p>
           <p class="result-source"><strong>Result source:</strong> <span id="resultSource">Not run yet</span></p>
           <ul id="changeList">
             <li>Run an optimization to see specific improvements.</li>

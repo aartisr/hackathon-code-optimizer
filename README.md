@@ -7,6 +7,8 @@ The app supports two inference paths:
 - Browser inference (WebGPU + WebLLM)
 - Python backend inference (FastAPI)
 
+In backend mode, optimization now uses locally cached Transformer models when available.
+
 ## What This App Does
 
 - Supports `Inference Engine` switching between Browser and Backend API.
@@ -81,6 +83,7 @@ npm run dev:api
 ```
 
 `npm run models:download` is a one-time setup step. It stores model artifacts under `backend/model-cache/` and skips re-download on future runs unless you force it.
+These downloads are now Transformers-compatible model repos used directly by the backend inference runtime.
 
 Optional targeted downloads:
 
@@ -111,10 +114,18 @@ Backend is now the default inference engine in the UI.
 
 The app will call `POST /optimize` and display source/timing metadata from the backend response.
 
+Important:
+
+- The UI now includes an explicit `Model used` label for transparency.
+- Backend can run in model-required mode via `Require backend model`.
+- When `Require backend model` is enabled, backend will fail fast instead of using heuristic fallback.
+- When `Require backend model` is disabled, backend may fall back to heuristic optimization if model inference fails.
+
 ## UI Controls Overview
 
 - `Inference Engine`: choose Browser or Backend API execution.
 - `Backend URL`: backend base URL used when Inference Engine is Backend.
+- `Require backend model`: require true backend model inference (no heuristic fallback).
 - `Runtime Mode`: browser path selection (auto / tiny-only / local-only).
 - `Performance`: latency-vs-quality tradeoff.
 - `Result source`: explicitly shows where output came from.

@@ -33,11 +33,16 @@ const els = {
   responseTime: document.querySelector("#responseTime"),
   responseTimeLabel: document.querySelector("#responseTimeLabel"),
   backendUrl: document.querySelector("#backendUrl"),
+  backendModel: document.querySelector("#backendModel"),
+  requireBackendModel: document.querySelector("#requireBackendModel"),
   phaseTotal: document.querySelector("#phaseTotal"),
   phaseModelLoad: document.querySelector("#phaseModelLoad"),
   phaseGeneration: document.querySelector("#phaseGeneration"),
   phasePostProcess: document.querySelector("#phasePostProcess"),
   phaseLocal: document.querySelector("#phaseLocal"),
+  modeSummaryTitle: document.querySelector("#modeSummaryTitle"),
+  modeSummaryText: document.querySelector("#modeSummaryText"),
+  modelUsed: document.querySelector("#modelUsed"),
   resultSource: document.querySelector("#resultSource"),
   runtimeMode: document.querySelector("#runtimeMode"),
   safeModeBanner: document.querySelector("#safeModeBanner"),
@@ -316,7 +321,9 @@ function parseModelResponse(text, sourceCode) {
         qualityScore: Number(parsed.qualityScore) || 82,
         impactScore: Number(parsed.impactScore) || 68,
         source: "model",
-        sourceLabel: "Model output (strict JSON)"
+        sourceLabel: "Model output (strict JSON)",
+        modelUsed: activeModelId,
+        modelUsedLabel: `Browser model: ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}`
       };
 
       if (!looksLikeCode(modelResult.optimizedCode)) {
@@ -362,7 +369,9 @@ function fallbackParse(text, sourceCode) {
     qualityScore: 78,
     impactScore: 58,
     source: "model-freeform",
-    sourceLabel: "Model output (free-form parse)"
+    sourceLabel: "Model output (free-form parse)",
+    modelUsed: activeModelId,
+    modelUsedLabel: `Browser model: ${activeModelId.includes("Phi") ? "Phi-3 Mini" : "TinyLlama"}`
   };
 }
 
@@ -420,6 +429,10 @@ function syncSafeModeBanner() {
 function syncInferenceModeUI() {
   const backendMode = els.inferenceMode.value === "backend";
   els.loadModelButton.disabled = backendMode;
+  setControlAvailability(els.backendUrl, backendMode);
+  setControlAvailability(els.backendModel, backendMode);
+  setControlAvailability(els.requireBackendModel, backendMode);
+  setControlAvailability(els.runtimeMode, !backendMode);
 
   if (backendMode) {
     setModelState("ready", "Backend API mode enabled", 100);
@@ -436,6 +449,55 @@ function syncInferenceModeUI() {
   }
 
   syncSafeModeBanner();
+  updateModeSummary();
+}
+
+/**
+ * Enables/disables a control and visually mutes its label when not applicable.
+ *
+ * @param {HTMLElement | null} control
+ * @param {boolean} enabled
+ */
+function setControlAvailability(control, enabled) {
+  if (!control) return;
+  control.disabled = !enabled;
+  const label = control.closest("label");
+  if (!label) return;
+  label.classList.toggle("muted-control", !enabled);
+}
+
+/**
+ * Explains the currently selected execution strategy in plain language.
+ */
+function updateModeSummary() {
+  const backendMode = els.inferenceMode.value === "backend";
+  if (backendMode) {
+    const selected = els.backendModel.value;
+    const requireModel = Boolean(els.requireBackendModel.checked);
+    const selectedLabel = selected === "phi3" ? "Phi-3" : selected === "tinyllama" ? "TinyLlama" : "Auto model";
+
+    els.modeSummaryTitle.textContent = `Backend API · ${selectedLabel}`;
+    els.modeSummaryText.textContent = requireModel
+      ? "Strict path enabled: optimization must come from a backend model. If model inference is unavailable, the request fails clearly."
+      : "Resilient path enabled: backend attempts model inference first, then falls back to heuristic optimization if needed.";
+    return;
+  }
+
+  const runtime = els.runtimeMode.value;
+  if (runtime === "local-only") {
+    els.modeSummaryTitle.textContent = "Browser · Local-only review";
+    els.modeSummaryText.textContent = "No model inference is used. Optimizations come from local heuristic rules for maximum reliability.";
+    return;
+  }
+
+  if (runtime === "tiny-only") {
+    els.modeSummaryTitle.textContent = "Browser · TinyLlama only";
+    els.modeSummaryText.textContent = "Uses TinyLlama in-browser for lower memory usage and better stability on constrained devices.";
+    return;
+  }
+
+  els.modeSummaryTitle.textContent = "Browser · Auto runtime";
+  els.modeSummaryText.textContent = "Attempts Phi-3 first, then falls back to TinyLlama if needed. Best quality when enough device memory is available.";
 }
 
 /**
@@ -458,12 +520,21 @@ async function runBackendOptimization(code) {
       language: els.languageSelect.value,
       goal: els.goalSelect.value,
       strict: els.strictMode.checked,
-      performanceMode: els.performanceMode.value
+      performanceMode: els.performanceMode.value,
+      preferredModel: els.backendModel?.value || "auto",
+      requireModel: Boolean(els.requireBackendModel?.checked)
     })
   });
 
   if (!response.ok) {
-    throw new Error(`Backend optimization failed (${response.status}).`);
+    let detail = "";
+    try {
+      const errorPayload = await response.json();
+      detail = errorPayload?.detail ? ` ${errorPayload.detail}` : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(`Backend optimization failed (${response.status}).${detail}`);
   }
 
   const payload = await response.json();
@@ -475,6 +546,8 @@ async function runBackendOptimization(code) {
     impactScore: Number(payload.impactScore) || 55,
     source: payload.source || "backend",
     sourceLabel: payload.sourceLabel || "Backend API optimization",
+    modelUsed: payload.modelUsed || "none",
+    modelUsedLabel: payload.modelUsedLabel || "No model info from backend",
     timings: {
       modelLoadMs: Number(payload?.timings?.modelLoadMs) || 0,
       generationMs: Number(payload?.timings?.generationMs) || roundTripMs,
@@ -900,6 +973,8 @@ function runLocalOptimization(code, reason = "Local heuristic optimization (no m
     impactScore,
     source: "local",
     sourceLabel: reason,
+    modelUsed: "none",
+    modelUsedLabel: "No model (local heuristic path)",
     timings: {
       localOptimizeMs
     }
@@ -923,6 +998,7 @@ function renderResults(result) {
   els.impactScore.textContent = Math.round(result.impactScore);
   els.qualityLabel.textContent = result.qualityScore >= 85 ? "Strong result" : result.qualityScore >= 70 ? "Useful improvement" : "Needs review";
   els.impactLabel.textContent = result.impactScore >= 75 ? "High value" : result.impactScore >= 50 ? "Moderate value" : "Light cleanup";
+  els.modelUsed.textContent = result.modelUsedLabel || "Unknown model usage";
   els.resultSource.textContent = result.sourceLabel || "Unknown source";
 }
 
@@ -1004,6 +1080,8 @@ els.inferenceMode.addEventListener("change", () => {
   modelAttempted = false;
   syncInferenceModeUI();
 });
+els.backendModel.addEventListener("change", updateModeSummary);
+els.requireBackendModel.addEventListener("change", updateModeSummary);
 els.runtimeMode.addEventListener("change", () => {
   modelAttempted = false;
   if (els.runtimeMode.value === "local-only") {
@@ -1012,6 +1090,7 @@ els.runtimeMode.addEventListener("change", () => {
     setModelState("error", "Local-only mode enabled. Browser model loading is disabled.", 0);
   }
   syncSafeModeBanner();
+  updateModeSummary();
 });
 els.performanceMode.addEventListener("change", () => {
   modelAttempted = false;
@@ -1046,3 +1125,4 @@ els.copyButton.addEventListener("click", async () => {
 loadSample(0);
 syncSafeModeBanner();
 syncInferenceModeUI();
+updateModeSummary();

@@ -9,8 +9,8 @@ from huggingface_hub import snapshot_download
 
 
 MODEL_REPOS = {
-    "phi3": "mlc-ai/Phi-3-mini-4k-instruct-q4f16_1-MLC",
-    "tinyllama": "mlc-ai/TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC",
+    "phi3": "microsoft/Phi-3-mini-4k-instruct",
+    "tinyllama": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
 }
 
 CACHE_ROOT = Path(__file__).resolve().parent / "model-cache"
@@ -43,6 +43,7 @@ def write_marker(model_key: str, repo_id: str) -> None:
     payload = {
         "status": "ok",
         "repo": repo_id,
+        "runtime": "transformers",
         "downloadedAt": datetime.now(timezone.utc).isoformat(),
     }
     marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
