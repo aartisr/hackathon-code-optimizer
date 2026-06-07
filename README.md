@@ -18,6 +18,17 @@ In backend mode, optimization now uses locally cached Transformer models when av
 - Provides local heuristic optimization fallback when model/API output is unavailable.
 - Shows transformed code, quality/impact scores, result source, and phase-by-phase timing.
 
+## Limitations
+
+- This tool works on one pasted snippet at a time. It does not optimize an entire project in one run.
+- It cannot guarantee behavior is always preserved, even when `Preserve behavior` is enabled.
+- Quality and impact scores are estimates. They are useful hints, not exact measurements.
+- Browser model mode depends on WebGPU. On unsupported devices/browsers, model inference may not run.
+- Backend model mode depends on local model files in `backend/model-cache/`. If files are missing, the backend falls back or fails (based on settings).
+- Downloading backend models requires network access and valid access to Hugging Face model repos. Downloads can fail due to permissions, network, or service limits.
+- There is no login, user isolation, or rate limiting in this local FastAPI app by default.
+- There is no `npm run build` script in this repo right now. The frontend is served as static files for local/dev use.
+
 ## Model Strategy
 
 The app uses two in-browser model targets:
